@@ -2216,16 +2216,38 @@ fail:
 /*
  * Create URL for a block, and return pointer to the URL's URI path.
  */
+
+/*
+ * Improve S3 name hashing by reversing the bit sequence of the block number
+ */
+static s3b_block_t bit_reverse(s3b_block_t block_num)
+{
+    int nbits = sizeof(s3b_block_t) * 8;
+    s3b_block_t reversed_block_num = (s3b_block_t)0;
+    int b, ib;
+
+    if (block_num == 0) return block_num;
+
+    for (b = nbits - 1, ib = 0; b >= 0; b--, ib++) {
+	unsigned char bit = (block_num & (1 << b)) >> b;
+	reversed_block_num |= bit << ib;
+    }
+
+    return reversed_block_num;
+}
+
 static void
 http_io_get_block_url(char *buf, size_t bufsiz, struct http_io_conf *config, s3b_block_t block_num)
 {
     int len;
 
     if (config->vhost)
-        len = snprintf(buf, bufsiz, "%s%s%0*jx", config->baseURL, config->prefix, S3B_BLOCK_NUM_DIGITS, (uintmax_t)block_num);
+        len = snprintf(buf, bufsiz, "%s%s%0*jx", config->baseURL, config->prefix, S3B_BLOCK_NUM_DIGITS,
+                       (uintmax_t)(bit_reverse(block_num)));
     else {
         len = snprintf(buf, bufsiz, "%s%s/%s%0*jx", config->baseURL,
-          config->bucket, config->prefix, S3B_BLOCK_NUM_DIGITS, (uintmax_t)block_num);
+                       config->bucket, config->prefix, S3B_BLOCK_NUM_DIGITS,
+                       (uintmax_t)(bit_reverse(block_num)));
     }
     (void)len;                  /* avoid compiler warning when NDEBUG defined */
     assert(len < bufsiz);
