@@ -24,7 +24,7 @@
 #include "block_cache.h"
 #include "ec_protect.h"
 #include "fuse_ops.h"
-#include "http_io.h"
+#include "s3b_http_io.h"
 #include "test_io.h"
 #include "s3b_config.h"
 
@@ -130,14 +130,14 @@ static struct s3b_config config = {
 
     /* HTTP config */
     .http_io= {
-        .accessId=              NULL,
-        .accessKey=             NULL,
+        .auth.u.s3.accessId=      NULL,
+        .auth.u.s3.accessKey=     NULL,
+        .auth.u.s3.accessType=    S3BACKER_DEFAULT_ACCESS_TYPE,
+        .auth.u.s3.authVersion=   S3BACKER_DEFAULT_AUTH_VERSION,
         .baseURL=               NULL,
         .region=                NULL,
         .bucket=                NULL,
         .prefix=                S3BACKER_DEFAULT_PREFIX,
-        .accessType=            S3BACKER_DEFAULT_ACCESS_TYPE,
-        .authVersion=           S3BACKER_DEFAULT_AUTH_VERSION,
         .user_agent=            user_agent_buf,
         .compress=              S3BACKER_DEFAULT_COMPRESSION,
         .timeout=               S3BACKER_DEFAULT_TIMEOUT,
@@ -193,23 +193,23 @@ static const struct fuse_opt option_list[] = {
     },
     {
         .templ=     "--accessId=%s",
-        .offset=    offsetof(struct s3b_config, http_io.accessId),
+        .offset=    offsetof(struct s3b_config, http_io.auth.u.s3.accessId),
     },
     {
         .templ=     "--accessKey=%s",
-        .offset=    offsetof(struct s3b_config, http_io.accessKey),
+        .offset=    offsetof(struct s3b_config, http_io.auth.u.s3.accessKey),
     },
     {
         .templ=     "--accessType=%s",
-        .offset=    offsetof(struct s3b_config, http_io.accessType),
+        .offset=    offsetof(struct s3b_config, http_io.auth.u.s3.accessType),
     },
     {
         .templ=     "--accessEC2IAM=%s",
-        .offset=    offsetof(struct s3b_config, http_io.ec2iam_role),
+        .offset=    offsetof(struct s3b_config, http_io.auth.u.s3.ec2iam_role),
     },
     {
         .templ=     "--authVersion=%s",
-        .offset=    offsetof(struct s3b_config, http_io.authVersion),
+        .offset=    offsetof(struct s3b_config, http_io.auth.u.s3.authVersion),
     },
     {
         .templ=     "--listBlocks",
@@ -892,7 +892,7 @@ validate_config(void)
     int r;
 
     /* Default to $HOME/.s3backer for accessFile */
-    if (config.http_io.ec2iam_role == NULL && config.accessFile == NULL) {
+    if (config.http_io.auth.u.s3.ec2iam_role == NULL && config.accessFile == NULL) {
         const char *home = getenv("HOME");
         char buf[PATH_MAX];
 
@@ -910,44 +910,44 @@ validate_config(void)
     }
 
     /* If no accessId specified, default to first in accessFile */
-    if (config.http_io.accessId == NULL && config.accessFile != NULL)
-        search_access_for(config.accessFile, NULL, &config.http_io.accessId, NULL);
-    if (config.http_io.accessId != NULL && *config.http_io.accessId == '\0')
-        config.http_io.accessId = NULL;
+    if (config.http_io.auth.u.s3.accessId == NULL && config.accessFile != NULL)
+        search_access_for(config.accessFile, NULL, &config.http_io.auth.u.s3.accessId, NULL);
+    if (config.http_io.auth.u.s3.accessId != NULL && *config.http_io.auth.u.s3.accessId == '\0')
+        config.http_io.auth.u.s3.accessId = NULL;
 
     /* If no accessId, only read operations will succeed */
-    if (config.http_io.accessId == NULL && !config.fuse_ops.read_only && !customBaseURL && config.http_io.ec2iam_role == NULL) {
+    if (config.http_io.auth.u.s3.accessId == NULL && !config.fuse_ops.read_only && !customBaseURL && config.http_io.auth.u.s3.ec2iam_role == NULL) {
         warnx("warning: no `accessId' specified; only read operations will succeed");
         warnx("you can eliminate this warning by providing the `--readOnly' flag");
     }
 
     /* Find key in file if not specified explicitly */
-    if (config.http_io.accessId == NULL && config.http_io.accessKey != NULL) {
+    if (config.http_io.auth.u.s3.accessId == NULL && config.http_io.auth.u.s3.accessKey != NULL) {
         warnx("an `accessKey' was specified but no `accessId' was specified");
         return -1;
     }
-    if (config.http_io.accessId != NULL) {
-        if (config.http_io.accessKey == NULL && config.accessFile != NULL)
-            search_access_for(config.accessFile, config.http_io.accessId, NULL, &config.http_io.accessKey);
-        if (config.http_io.accessKey == NULL) {
+    if (config.http_io.auth.u.s3.accessId != NULL) {
+        if (config.http_io.auth.u.s3.accessKey == NULL && config.accessFile != NULL)
+            search_access_for(config.accessFile, config.http_io.auth.u.s3.accessId, NULL, &config.http_io.auth.u.s3.accessKey);
+        if (config.http_io.auth.u.s3.accessKey == NULL) {
             warnx("no `accessKey' specified");
             return -1;
         }
     }
 
     /* Check for conflict between explicit accessId and EC2 IAM role */
-    if (config.http_io.accessId != NULL && config.http_io.ec2iam_role != NULL) {
+    if (config.http_io.auth.u.s3.accessId != NULL && config.http_io.auth.u.s3.ec2iam_role != NULL) {
         warnx("an `accessKey' must not be specified when an `accessEC2IAM' role is specified");
         return -1;
     }
 
     /* Check auth version */
     for (i = 0; i < sizeof(s3_auth_types) / sizeof(*s3_auth_types); i++) {
-        if (strcmp(config.http_io.authVersion, s3_auth_types[i]) == 0)
+        if (strcmp(config.http_io.auth.u.s3.authVersion, s3_auth_types[i]) == 0)
             break;
     }
     if (i == sizeof(s3_auth_types) / sizeof(*s3_auth_types)) {
-        warnx("illegal authentication version `%s'", config.http_io.authVersion);
+        warnx("illegal authentication version `%s'", config.http_io.auth.u.s3.authVersion);
         return -1;
     }
 
@@ -1037,11 +1037,11 @@ validate_config(void)
 
     /* Check S3 access privilege */
     for (i = 0; i < sizeof(s3_acls) / sizeof(*s3_acls); i++) {
-        if (strcmp(config.http_io.accessType, s3_acls[i]) == 0)
+        if (strcmp(config.http_io.auth.u.s3.accessType, s3_acls[i]) == 0)
             break;
     }
     if (i == sizeof(s3_acls) / sizeof(*s3_acls)) {
-        warnx("illegal access type `%s'", config.http_io.accessType);
+        warnx("illegal access type `%s'", config.http_io.auth.u.s3.accessType);
         return -1;
     }
 
@@ -1504,12 +1504,12 @@ dump_config(void)
     (*config.log)(LOG_DEBUG, "s3backer config:");
     (*config.log)(LOG_DEBUG, "%24s: %s", "test mode", config.test ? "true" : "false");
     (*config.log)(LOG_DEBUG, "%24s: %s", "directIO", config.fuse_ops.direct_io ? "true" : "false");
-    (*config.log)(LOG_DEBUG, "%24s: \"%s\"", "accessId", config.http_io.accessId != NULL ? config.http_io.accessId : "");
-    (*config.log)(LOG_DEBUG, "%24s: \"%s\"", "accessKey", config.http_io.accessKey != NULL ? "****" : "");
+    (*config.log)(LOG_DEBUG, "%24s: \"%s\"", "accessId", config.http_io.auth.u.s3.accessId != NULL ? config.http_io.auth.u.s3.accessId : "");
+    (*config.log)(LOG_DEBUG, "%24s: \"%s\"", "accessKey", config.http_io.auth.u.s3.accessKey != NULL ? "****" : "");
     (*config.log)(LOG_DEBUG, "%24s: \"%s\"", "accessFile", config.accessFile);
-    (*config.log)(LOG_DEBUG, "%24s: %s", "accessType", config.http_io.accessType);
-    (*config.log)(LOG_DEBUG, "%24s: \"%s\"", "ec2iam_role", config.http_io.ec2iam_role != NULL ? config.http_io.ec2iam_role : "");
-    (*config.log)(LOG_DEBUG, "%24s: %s", "authVersion", config.http_io.authVersion);
+    (*config.log)(LOG_DEBUG, "%24s: %s", "accessType", config.http_io.auth.u.s3.accessType);
+    (*config.log)(LOG_DEBUG, "%24s: \"%s\"", "ec2iam_role", config.http_io.auth.u.s3.ec2iam_role != NULL ? config.http_io.auth.u.s3.ec2iam_role : "");
+    (*config.log)(LOG_DEBUG, "%24s: %s", "authVersion", config.http_io.auth.u.s3.authVersion);
     (*config.log)(LOG_DEBUG, "%24s: \"%s\"", "baseURL", config.http_io.baseURL);
     (*config.log)(LOG_DEBUG, "%24s: \"%s\"", "region", config.http_io.region);
     (*config.log)(LOG_DEBUG, "%24s: \"%s\"", config.test ? "testdir" : "bucket", config.http_io.bucket);

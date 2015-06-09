@@ -21,7 +21,7 @@
  */
 
 #include "s3backer.h"
-#include "http_io.h"
+#include "s3b_http_io.h"
 #include "block_part.h"
 #include "test_io.h"
 

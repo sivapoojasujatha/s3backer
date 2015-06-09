@@ -22,35 +22,8 @@
 
 #include "s3backer.h"
 #include "block_part.h"
-#include "http_io.h"
-
-/* HTTP definitions */
-#define HTTP_GET                    "GET"
-#define HTTP_PUT                    "PUT"
-#define HTTP_DELETE                 "DELETE"
-#define HTTP_HEAD                   "HEAD"
-#define HTTP_NOT_MODIFIED           304
-#define HTTP_UNAUTHORIZED           401
-#define HTTP_FORBIDDEN              403
-#define HTTP_NOT_FOUND              404
-#define HTTP_PRECONDITION_FAILED    412
-#define AUTH_HEADER                 "Authorization"
-#define CTYPE_HEADER                "Content-Type"
-#define CONTENT_ENCODING_HEADER     "Content-Encoding"
-#define ETAG_HEADER                 "ETag"
-#define CONTENT_ENCODING_DEFLATE    "deflate"
-#define CONTENT_ENCODING_ENCRYPT    "encrypt"
-#define MD5_HEADER                  "Content-MD5"
-#define ACL_HEADER                  "x-amz-acl"
-#define CONTENT_SHA256_HEADER       "x-amz-content-sha256"
-#define STORAGE_CLASS_HEADER        "x-amz-storage-class"
-#define SCLASS_STANDARD             "STANDARD"
-#define SCLASS_REDUCED_REDUNDANCY   "REDUCED_REDUNDANCY"
-#define FILE_SIZE_HEADER            "x-amz-meta-s3backer-filesize"
-#define BLOCK_SIZE_HEADER           "x-amz-meta-s3backer-blocksize"
-#define HMAC_HEADER                 "x-amz-meta-s3backer-hmac"
-#define IF_MATCH_HEADER             "If-Match"
-#define IF_NONE_MATCH_HEADER        "If-None-Match"
+#include "http_gio.h"
+#include "s3b_http_io.h"
 
 /* MIME type for blocks */
 #define CONTENT_TYPE                "application/x-s3backer-block"
@@ -60,6 +33,14 @@
 
 /* Mounted file object name */
 #define MOUNTED_FLAG                "s3backer-mounted"
+
+/* S3-specific HTTP definitions */
+#define FILE_SIZE_HEADER            "x-amz-meta-s3backer-filesize"
+#define BLOCK_SIZE_HEADER           "x-amz-meta-s3backer-blocksize"
+#define HMAC_HEADER                 "x-amz-meta-s3backer-hmac"
+#define ACL_HEADER                  "x-amz-acl"
+#define CONTENT_SHA256_HEADER       "x-amz-content-sha256"
+#define STORAGE_CLASS_HEADER        "x-amz-storage-class"
 
 /* HTTP `Date' and `x-amz-date' header formats */
 #define HTTP_DATE_HEADER            "Date"
@@ -120,80 +101,6 @@
  * This implementation does no caching or consistency checking.
  */
 
-/* Internal definitions */
-struct curl_holder {
-    CURL                        *curl;
-    LIST_ENTRY(curl_holder)     link;
-};
-
-/* Internal state */
-struct http_io_private {
-    struct http_io_conf         *config;
-    struct http_io_stats        stats;
-    LIST_HEAD(, curl_holder)    curls;
-    pthread_mutex_t             mutex;
-    u_int                       *non_zero;      // config->nonzero_bitmap is moved to here
-    pthread_t                   iam_thread;     // IAM credentials refresh thread
-    u_char                      shutting_down;
-
-    /* Encryption info */
-    const EVP_CIPHER            *cipher;
-    u_int                       keylen;                         // length of key and ivkey
-    u_char                      key[EVP_MAX_KEY_LENGTH];        // key used to encrypt data
-    u_char                      ivkey[EVP_MAX_KEY_LENGTH];      // key used to encrypt block number to get IV for data
-};
-
-/* I/O buffers */
-struct http_io_bufs {
-    size_t      rdremain;
-    size_t      wrremain;
-    char        *rddata;
-    const char  *wrdata;
-};
-
-/* I/O state when reading/writing a block */
-struct http_io {
-
-    // I/O buffers
-    struct http_io_bufs bufs;
-
-    // XML parser and bucket listing info
-    XML_Parser          xml;                    // XML parser
-    int                 xml_error;              // XML parse error (if any)
-    int                 xml_error_line;         // XML parse error line
-    int                 xml_error_column;       // XML parse error column
-    char                *xml_path;              // Current XML path
-    char                *xml_text;              // Current XML text
-    int                 xml_text_len;           // # chars in 'xml_text' buffer
-    int                 xml_text_max;           // max chars in 'xml_text' buffer
-    int                 list_truncated;         // returned list was truncated
-    s3b_block_t         last_block;             // last dirty block listed
-    block_list_func_t   *callback_func;         // callback func for listing blocks
-    void                *callback_arg;          // callback arg for listing blocks
-    struct http_io_conf *config;                // configuration
-
-    // Other info that needs to be passed around
-    const char          *method;                // HTTP method
-    const char          *url;                   // HTTP URL
-    struct curl_slist   *headers;               // HTTP headers
-    void                *dest;                  // Block data (when reading)
-    const void          *src;                   // Block data (when writing)
-    s3b_block_t         block_num;              // The block we're reading/writing
-    u_int               buf_size;               // Size of data buffer
-    u_int               *content_lengthp;       // Returned Content-Length
-    uintmax_t           file_size;              // file size from "x-amz-meta-s3backer-filesize"
-    u_int               block_size;             // block size from "x-amz-meta-s3backer-blocksize"
-    u_int               expect_304;             // a verify request; expect a 304 response
-    u_char              md5[MD5_DIGEST_LENGTH]; // parsed ETag header
-    u_char              hmac[SHA_DIGEST_LENGTH];// parsed "x-amz-meta-s3backer-hmac" header
-    char                content_encoding[32];   // received content encoding
-    check_cancel_t      *check_cancel;          // write check-for-cancel callback
-    void                *check_cancel_arg;      // write check-for-cancel callback argument
-};
-
-/* CURL prepper function type */
-typedef void http_io_curl_prepper_t(CURL *curl, struct http_io *io);
-
 /* s3backer_store functions */
 static int http_io_meta_data(struct s3backer_store *s3b, off_t *file_sizep, u_int *block_sizep);
 static int http_io_set_mounted(struct s3backer_store *s3b, int *old_valuep, int new_value);
@@ -206,13 +113,6 @@ static int http_io_write_block_part(struct s3backer_store *s3b, s3b_block_t bloc
 static int http_io_list_blocks(struct s3backer_store *s3b, block_list_func_t *callback, void *arg);
 static int http_io_flush(struct s3backer_store *s3b);
 static void http_io_destroy(struct s3backer_store *s3b);
-
-/* Other functions */
-static http_io_curl_prepper_t http_io_head_prepper;
-static http_io_curl_prepper_t http_io_read_prepper;
-static http_io_curl_prepper_t http_io_write_prepper;
-static http_io_curl_prepper_t http_io_list_prepper;
-static http_io_curl_prepper_t http_io_iamcreds_prepper;
 
 /* S3 REST API functions */
 static void http_io_get_block_url(char *buf, size_t bufsiz, struct http_io_conf *config, s3b_block_t block_num);
@@ -227,21 +127,9 @@ static int update_iam_credentials(struct http_io_private *priv);
 static char *parse_json_field(struct http_io_private *priv, const char *json, const char *field);
 
 /* Bucket listing functions */
-static size_t http_io_curl_list_reader(const void *ptr, size_t size, size_t nmemb, void *stream);
 static void http_io_list_elem_start(void *arg, const XML_Char *name, const XML_Char **atts);
 static void http_io_list_elem_end(void *arg, const XML_Char *name);
 static void http_io_list_text(void *arg, const XML_Char *s, int len);
-
-/* HTTP and curl functions */
-static int http_io_perform_io(struct http_io_private *priv, struct http_io *io, http_io_curl_prepper_t *prepper);
-static size_t http_io_curl_reader(const void *ptr, size_t size, size_t nmemb, void *stream);
-static size_t http_io_curl_writer(void *ptr, size_t size, size_t nmemb, void *stream);
-static size_t http_io_curl_header(void *ptr, size_t size, size_t nmemb, void *stream);
-static struct curl_slist *http_io_add_header(struct curl_slist *headers, const char *fmt, ...)
-    __attribute__ ((__format__ (__printf__, 2, 3)));
-static void http_io_add_date(struct http_io_private *priv, struct http_io *const io, time_t now);
-static CURL *http_io_acquire_curl(struct http_io_private *priv, struct http_io *io);
-static void http_io_release_curl(struct http_io_private *priv, CURL **curlp, int may_cache);
 
 /* Misc */
 static void http_io_openssl_locker(int mode, int i, const char *file, int line);
@@ -256,11 +144,23 @@ static int http_io_parse_hex(const char *str, u_char *buf, u_int nbytes);
 static void http_io_prhex(char *buf, const u_char *data, size_t len);
 static int http_io_strcasecmp_ptr(const void *ptr1, const void *ptr2);
 
+static void file_size_parser(char *buf, struct http_io *io);
+static void block_size_parser(char *buf, struct http_io *io);
+static void etag_parser(char *buf, struct http_io *io);
+static void hmac_parser(char *buf, struct http_io *io);
+static void encoding_parser(char *buf, struct http_io *io);
+
 /* Internal variables */
 static pthread_mutex_t *openssl_locks;
 static int num_openssl_locks;
 static u_char zero_md5[MD5_DIGEST_LENGTH];
 static u_char zero_hmac[SHA_DIGEST_LENGTH];
+
+/* NULL-terminated vector of header parsers for S3 */
+static header_parser_t s3b_header_parser[] = {
+  file_size_parser, block_size_parser, etag_parser,
+  hmac_parser, encoding_parser, NULL
+};
 
 /*
  * Constructor
@@ -383,10 +283,10 @@ http_io_create(struct http_io_conf *config)
     curl_global_init(CURL_GLOBAL_ALL);
 
     /* Initialize IAM credentials and start updater thread */
-    if (config->ec2iam_role != NULL) {
+    if (config->auth.u.s3.ec2iam_role != NULL) {
         if ((r = update_iam_credentials(priv)) != 0)
             goto fail5;
-        if ((r = pthread_create(&priv->iam_thread, NULL, update_iam_credentials_main, priv)) != 0)
+        if ((r = pthread_create(&priv->auth_thread, NULL, update_iam_credentials_main, priv)) != 0)
             goto fail5;
     }
 
@@ -437,11 +337,11 @@ http_io_destroy(struct s3backer_store *const s3b)
 
     /* Shut down IAM thread */
     priv->shutting_down = 1;
-    if (config->ec2iam_role != NULL) {
+    if (config->auth.u.s3.ec2iam_role != NULL) {
         (*config->log)(LOG_DEBUG, "waiting for EC2 IAM thread to shutdown");
-        if ((r = pthread_cancel(priv->iam_thread)) != 0)
+        if ((r = pthread_cancel(priv->auth_thread)) != 0)
             (*config->log)(LOG_ERR, "pthread_cancel: %s", strerror(r));
-        if ((r = pthread_join(priv->iam_thread, NULL)) != 0)
+        if ((r = pthread_join(priv->auth_thread, NULL)) != 0)
             (*config->log)(LOG_ERR, "pthread_join: %s", strerror(r));
         else
             (*config->log)(LOG_DEBUG, "EC2 IAM thread successfully shutdown");
@@ -486,6 +386,26 @@ http_io_get_stats(struct s3backer_store *s3b, struct http_io_stats *stats)
     pthread_mutex_unlock(&priv->mutex);
 }
 
+
+/*
+ * Add date header based on supplied time.
+ */
+static void
+http_io_add_date(struct http_io_private *const priv, struct http_io *const io, time_t now)
+{
+    struct http_io_conf *const config = priv->config;
+    char buf[DATE_BUF_SIZE];
+    struct tm tm;
+
+    if (strcmp(config->auth.u.s3.authVersion, AUTH_VERSION_AWS2) == 0) {
+        strftime(buf, sizeof(buf), HTTP_DATE_BUF_FMT, gmtime_r(&now, &tm));
+        io->headers = http_io_add_header(io->headers, "%s: %s", HTTP_DATE_HEADER, buf);
+    } else {
+        strftime(buf, sizeof(buf), AWS_DATE_BUF_FMT, gmtime_r(&now, &tm));
+        io->headers = http_io_add_header(io->headers, "%s: %s", AWS_DATE_HEADER, buf);
+    }
+}
+
 static int
 http_io_list_blocks(struct s3backer_store *s3b, block_list_func_t *callback, void *arg)
 {
@@ -498,6 +418,7 @@ http_io_list_blocks(struct s3backer_store *s3b, block_list_func_t *callback, voi
 
     /* Initialize I/O info */
     memset(&io, 0, sizeof(io));
+    io.header_parser = s3b_header_parser;
     io.url = urlbuf;
     io.method = HTTP_GET;
     io.config = config;
@@ -599,30 +520,55 @@ fail:
     return r;
 }
 
-static void
-http_io_list_prepper(CURL *curl, struct http_io *io)
+/* Parsers defined */
+static void file_size_parser(char *buf, struct http_io *io)
 {
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, http_io_curl_list_reader);
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, io);
-    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, io->headers);
-    curl_easy_setopt(curl, CURLOPT_ENCODING, "");
-    curl_easy_setopt(curl, CURLOPT_HTTP_CONTENT_DECODING, (long)1);
+    (void)sscanf(buf, FILE_SIZE_HEADER ": %ju", &io->file_size);
 }
 
-static size_t
-http_io_curl_list_reader(const void *ptr, size_t size, size_t nmemb, void *stream)
+static void block_size_parser(char *buf, struct http_io *io)
 {
-    struct http_io *const io = (struct http_io *)stream;
-    size_t total = size * nmemb;
+    (void)sscanf(buf, BLOCK_SIZE_HEADER ": %u", &io->block_size);
+}
 
-    if (io->xml_error != XML_ERROR_NONE)
-        return total;
-    if (XML_Parse(io->xml, ptr, total, 0) != XML_STATUS_OK) {
-        io->xml_error = XML_GetErrorCode(io->xml);
-        io->xml_error_line = XML_GetCurrentLineNumber(io->xml);
-        io->xml_error_column = XML_GetCurrentColumnNumber(io->xml);
+static void etag_parser(char *buf, struct http_io *io)
+{
+    char fmtbuf[64];
+    if (strncasecmp(buf, ETAG_HEADER ":", sizeof(ETAG_HEADER)) == 0) {
+        char md5buf[MD5_DIGEST_LENGTH * 2 + 1];
+
+        snprintf(fmtbuf, sizeof(fmtbuf), " \"%%%uc\"", MD5_DIGEST_LENGTH * 2);
+        if (sscanf(buf + sizeof(ETAG_HEADER), fmtbuf, md5buf) == 1)
+            http_io_parse_hex(md5buf, io->md5, MD5_DIGEST_LENGTH);
     }
-    return total;
+}
+
+static void hmac_parser(char *buf, struct http_io *io)
+{
+    char fmtbuf[64];
+    if (strncasecmp(buf, HMAC_HEADER ":", sizeof(HMAC_HEADER)) == 0) {
+        char hmacbuf[SHA_DIGEST_LENGTH * 2 + 1];
+
+        snprintf(fmtbuf, sizeof(fmtbuf), " \"%%%uc\"", SHA_DIGEST_LENGTH * 2);
+        if (sscanf(buf + sizeof(HMAC_HEADER), fmtbuf, hmacbuf) == 1)
+            http_io_parse_hex(hmacbuf, io->hmac, SHA_DIGEST_LENGTH);
+    }
+}
+
+static void encoding_parser(char *buf, struct http_io *io)
+{
+    if (strncasecmp(buf, CONTENT_ENCODING_HEADER ":", sizeof(CONTENT_ENCODING_HEADER)) == 0) {
+        size_t celen;
+        char *state;
+        char *s;
+
+        *io->content_encoding = '\0';
+        for (s = strtok_r(buf + sizeof(CONTENT_ENCODING_HEADER), WHITESPACE ",", &state);
+          s != NULL; s = strtok_r(NULL, WHITESPACE ",", &state)) {
+            celen = strlen(io->content_encoding);
+            snprintf(io->content_encoding + celen, sizeof(io->content_encoding) - celen, "%s%s", celen > 0 ? "," : "", s);
+        }
+    }
 }
 
 static void
@@ -735,6 +681,7 @@ http_io_meta_data(struct s3backer_store *s3b, off_t *file_sizep, u_int *block_si
 
     /* Initialize I/O info */
     memset(&io, 0, sizeof(io));
+    io.header_parser = s3b_header_parser;
     io.url = urlbuf;
     io.method = HTTP_HEAD;
 
@@ -766,18 +713,6 @@ done:
     return r;
 }
 
-static void
-http_io_head_prepper(CURL *curl, struct http_io *io)
-{
-    memset(&io->bufs, 0, sizeof(io->bufs));
-    curl_easy_setopt(curl, CURLOPT_NOBODY, 1);
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, http_io_curl_reader);
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, io);
-    curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, http_io_curl_header);
-    curl_easy_setopt(curl, CURLOPT_HEADERDATA, io);
-    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, io->headers);
-}
-
 static int
 http_io_set_mounted(struct s3backer_store *s3b, int *old_valuep, int new_value)
 {
@@ -790,6 +725,7 @@ http_io_set_mounted(struct s3backer_store *s3b, int *old_valuep, int new_value)
 
     /* Initialize I/O info */
     memset(&io, 0, sizeof(io));
+    io.header_parser = s3b_header_parser;
     io.url = urlbuf;
     io.method = HTTP_HEAD;
 
@@ -860,7 +796,7 @@ http_io_set_mounted(struct s3backer_store *s3b, int *old_valuep, int new_value)
 
         /* Add ACL header (PUT only) */
         if (new_value)
-            io.headers = http_io_add_header(io.headers, "%s: %s", ACL_HEADER, config->accessType);
+            io.headers = http_io_add_header(io.headers, "%s: %s", ACL_HEADER, config->auth.u.s3.accessType);
 
         /* Add storage class header (if needed) */
         if (config->rrs)
@@ -880,6 +816,19 @@ done:
     return r;
 }
 
+static void
+http_io_iamcreds_prepper(CURL *curl, struct http_io *io)
+{
+    memset(&io->bufs, 0, sizeof(io->bufs));
+    io->bufs.rdremain = io->buf_size;
+    io->bufs.rddata = io->dest;
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, http_io_curl_reader);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, io);
+    curl_easy_setopt(curl, CURLOPT_MAXFILESIZE_LARGE, (curl_off_t)io->buf_size);
+    curl_easy_setopt(curl, CURLOPT_ENCODING, "");
+    curl_easy_setopt(curl, CURLOPT_HTTP_CONTENT_DECODING, (long)0);
+}
+
 static int
 update_iam_credentials(struct http_io_private *const priv)
 {
@@ -894,10 +843,11 @@ update_iam_credentials(struct http_io_private *const priv)
     int r;
 
     /* Build URL */
-    snprintf(urlbuf, sizeof(urlbuf), "%s%s", EC2_IAM_META_DATA_URLBASE, config->ec2iam_role);
+    snprintf(urlbuf, sizeof(urlbuf), "%s%s", EC2_IAM_META_DATA_URLBASE, config->auth.u.s3.ec2iam_role);
 
     /* Initialize I/O info */
     memset(&io, 0, sizeof(io));
+    io.header_parser = s3b_header_parser;
     io.url = urlbuf;
     io.method = HTTP_GET;
     io.dest = buf;
@@ -928,12 +878,12 @@ update_iam_credentials(struct http_io_private *const priv)
 
     /* Update credentials */
     pthread_mutex_lock(&priv->mutex);
-    free(config->accessId);
-    free(config->accessKey);
-    free(config->iam_token);
-    config->accessId = access_id;
-    config->accessKey = access_key;
-    config->iam_token = iam_token;
+    free(config->auth.u.s3.accessId);
+    free(config->auth.u.s3.accessKey);
+    free(config->auth.u.s3.iam_token);
+    config->auth.u.s3.accessId = access_id;
+    config->auth.u.s3.accessKey = access_key;
+    config->auth.u.s3.iam_token = iam_token;
     pthread_mutex_unlock(&priv->mutex);
     (*config->log)(LOG_INFO, "successfully updated EC2 IAM credentials from %s", io.url);
 
@@ -1002,19 +952,6 @@ parse_json_field(struct http_io_private *priv, const char *json, const char *fie
     return value;
 }
 
-static void
-http_io_iamcreds_prepper(CURL *curl, struct http_io *io)
-{
-    memset(&io->bufs, 0, sizeof(io->bufs));
-    io->bufs.rdremain = io->buf_size;
-    io->bufs.rddata = io->dest;
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, http_io_curl_reader);
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, io);
-    curl_easy_setopt(curl, CURLOPT_MAXFILESIZE_LARGE, (curl_off_t)io->buf_size);
-    curl_easy_setopt(curl, CURLOPT_ENCODING, "");
-    curl_easy_setopt(curl, CURLOPT_HTTP_CONTENT_DECODING, (long)0);
-}
-
 static int
 http_io_read_block(struct s3backer_store *const s3b, s3b_block_t block_num, void *dest,
   u_char *actual_md5, const u_char *expect_md5, int strict)
@@ -1053,6 +990,7 @@ http_io_read_block(struct s3backer_store *const s3b, s3b_block_t block_num, void
 
     /* Initialize I/O info */
     memset(&io, 0, sizeof(io));
+    io.header_parser = s3b_header_parser;
     io.url = urlbuf;
     io.method = HTTP_GET;
     io.block_num = block_num;
@@ -1298,21 +1236,6 @@ fail:
     return r;
 }
 
-static void
-http_io_read_prepper(CURL *curl, struct http_io *io)
-{
-    memset(&io->bufs, 0, sizeof(io->bufs));
-    io->bufs.rdremain = io->buf_size;
-    io->bufs.rddata = io->dest;
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, http_io_curl_reader);
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, io);
-    curl_easy_setopt(curl, CURLOPT_MAXFILESIZE_LARGE, (curl_off_t)io->buf_size);
-    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, io->headers);
-    curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, http_io_curl_header);
-    curl_easy_setopt(curl, CURLOPT_HEADERDATA, io);
-    curl_easy_setopt(curl, CURLOPT_ENCODING, "");
-    curl_easy_setopt(curl, CURLOPT_HTTP_CONTENT_DECODING, (long)0);
-}
 
 /*
  * Write block if src != NULL, otherwise delete block.
@@ -1485,7 +1408,7 @@ http_io_write_block(struct s3backer_store *const s3b, s3b_block_t block_num, con
 
     /* Add ACL header (PUT only) */
     if (src != NULL)
-        io.headers = http_io_add_header(io.headers, "%s: %s", ACL_HEADER, config->accessType);
+        io.headers = http_io_add_header(io.headers, "%s: %s", ACL_HEADER, config->auth.u.s3.accessType);
 
     /* Add file size meta-data to zero'th block */
     if (src != NULL && block_num == 0) {
@@ -1527,25 +1450,6 @@ fail:
     return r;
 }
 
-static void
-http_io_write_prepper(CURL *curl, struct http_io *io)
-{
-    memset(&io->bufs, 0, sizeof(io->bufs));
-    if (io->src != NULL) {
-        io->bufs.wrremain = io->buf_size;
-        io->bufs.wrdata = io->src;
-    }
-    curl_easy_setopt(curl, CURLOPT_READFUNCTION, http_io_curl_writer);
-    curl_easy_setopt(curl, CURLOPT_READDATA, io);
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, http_io_curl_reader);
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, io);
-    if (io->src != NULL) {
-        curl_easy_setopt(curl, CURLOPT_UPLOAD, 1);
-        curl_easy_setopt(curl, CURLOPT_INFILESIZE_LARGE, (curl_off_t)io->buf_size);
-    }
-    curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, io->method);
-    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, io->headers);
-}
 
 static int
 http_io_read_block_part(struct s3backer_store *s3b, s3b_block_t block_num, u_int off, u_int len, void *dest)
@@ -1565,218 +1469,6 @@ http_io_write_block_part(struct s3backer_store *s3b, s3b_block_t block_num, u_in
     return block_part_write_block_part(s3b, block_num, config->block_size, off, len, src);
 }
 
-/*
- * Perform HTTP operation.
- */
-static int
-http_io_perform_io(struct http_io_private *priv, struct http_io *io, http_io_curl_prepper_t *prepper)
-{
-    struct http_io_conf *const config = priv->config;
-    struct timespec delay;
-    CURLcode curl_code;
-    u_int retry_pause = 0;
-    u_int total_pause;
-    long http_code;
-    double clen;
-    int attempt;
-    CURL *curl;
-
-    /* Debug */
-    if (config->debug)
-        (*config->log)(LOG_DEBUG, "%s %s", io->method, io->url);
-
-    /* Make attempts */
-    for (attempt = 0, total_pause = 0; 1; attempt++, total_pause += retry_pause) {
-
-        /* Acquire and initialize CURL instance */
-        if ((curl = http_io_acquire_curl(priv, io)) == NULL)
-            return EIO;
-        (*prepper)(curl, io);
-
-        /* Perform HTTP operation and check result */
-        if (attempt > 0)
-            (*config->log)(LOG_INFO, "retrying query (attempt #%d): %s %s", attempt + 1, io->method, io->url);
-        curl_code = curl_easy_perform(curl);
-
-        /* Find out what the HTTP result code was (if any) */
-        switch (curl_code) {
-        case CURLE_HTTP_RETURNED_ERROR:
-        case 0:
-            if (curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code) != 0)
-                http_code = 999;                                /* this should never happen */
-            break;
-        default:
-            http_code = -1;
-            break;
-        }
-
-        /* Work around the fact that libcurl converts a 304 HTTP code as success */
-        if (curl_code == 0 && http_code == HTTP_NOT_MODIFIED)
-            curl_code = CURLE_HTTP_RETURNED_ERROR;
-
-        /* In the case of a DELETE, treat an HTTP_NOT_FOUND error as successful */
-        if (curl_code == CURLE_HTTP_RETURNED_ERROR
-          && http_code == HTTP_NOT_FOUND
-          && strcmp(io->method, HTTP_DELETE) == 0)
-            curl_code = 0;
-
-        /* Handle success */
-        if (curl_code == 0) {
-            double curl_time;
-            int r = 0;
-
-            /* Extra debug logging */
-            if (config->debug)
-                (*config->log)(LOG_DEBUG, "success: %s %s", io->method, io->url);
-
-            /* Extract timing info */
-            if ((curl_code = curl_easy_getinfo(curl, CURLINFO_TOTAL_TIME, &curl_time)) != CURLE_OK) {
-                (*config->log)(LOG_ERR, "can't get cURL timing: %s", curl_easy_strerror(curl_code));
-                curl_time = 0.0;
-            }
-
-            /* Extract content-length (if required) */
-            if (io->content_lengthp != NULL) {
-                if ((curl_code = curl_easy_getinfo(curl, CURLINFO_CONTENT_LENGTH_DOWNLOAD, &clen)) == CURLE_OK)
-                    *io->content_lengthp = (u_int)clen;
-                else {
-                    (*config->log)(LOG_ERR, "can't get content-length: %s", curl_easy_strerror(curl_code));
-                    r = ENXIO;
-                }
-            }
-
-            /* Update stats */
-            pthread_mutex_lock(&priv->mutex);
-            if (strcmp(io->method, HTTP_GET) == 0) {
-                priv->stats.http_gets.count++;
-                priv->stats.http_gets.time += curl_time;
-            } else if (strcmp(io->method, HTTP_PUT) == 0) {
-                priv->stats.http_puts.count++;
-                priv->stats.http_puts.time += curl_time;
-            } else if (strcmp(io->method, HTTP_DELETE) == 0) {
-                priv->stats.http_deletes.count++;
-                priv->stats.http_deletes.time += curl_time;
-            } else if (strcmp(io->method, HTTP_HEAD) == 0) {
-                priv->stats.http_heads.count++;
-                priv->stats.http_heads.time += curl_time;
-            }
-            pthread_mutex_unlock(&priv->mutex);
-
-            /* Done */
-            http_io_release_curl(priv, &curl, r == 0);
-            return r;
-        }
-
-        /* Free the curl handle (and ensure we don't try to re-use it) */
-        http_io_release_curl(priv, &curl, 0);
-
-        /* Handle errors */
-        switch (curl_code) {
-        case CURLE_ABORTED_BY_CALLBACK:
-            if (config->debug)
-                (*config->log)(LOG_DEBUG, "write aborted: %s %s", io->method, io->url);
-            pthread_mutex_lock(&priv->mutex);
-            priv->stats.http_canceled_writes++;
-            pthread_mutex_unlock(&priv->mutex);
-            return ECONNABORTED;
-        case CURLE_OPERATION_TIMEDOUT:
-            (*config->log)(LOG_NOTICE, "operation timeout: %s %s", io->method, io->url);
-            pthread_mutex_lock(&priv->mutex);
-            priv->stats.curl_timeouts++;
-            pthread_mutex_unlock(&priv->mutex);
-            break;
-        case CURLE_HTTP_RETURNED_ERROR:                 /* special handling for some specific HTTP codes */
-            switch (http_code) {
-            case HTTP_NOT_FOUND:
-                if (config->debug)
-                    (*config->log)(LOG_DEBUG, "rec'd %ld response: %s %s", http_code, io->method, io->url);
-                return ENOENT;
-            case HTTP_UNAUTHORIZED:
-                (*config->log)(LOG_ERR, "rec'd %ld response: %s %s", http_code, io->method, io->url);
-                pthread_mutex_lock(&priv->mutex);
-                priv->stats.http_unauthorized++;
-                pthread_mutex_unlock(&priv->mutex);
-                return EACCES;
-            case HTTP_FORBIDDEN:
-                (*config->log)(LOG_ERR, "rec'd %ld response: %s %s", http_code, io->method, io->url);
-                pthread_mutex_lock(&priv->mutex);
-                priv->stats.http_forbidden++;
-                pthread_mutex_unlock(&priv->mutex);
-                return EPERM;
-            case HTTP_PRECONDITION_FAILED:
-                (*config->log)(LOG_INFO, "rec'd stale content: %s %s", io->method, io->url);
-                pthread_mutex_lock(&priv->mutex);
-                priv->stats.http_stale++;
-                pthread_mutex_unlock(&priv->mutex);
-                break;
-            case HTTP_NOT_MODIFIED:
-                if (io->expect_304) {
-                    if (config->debug)
-                        (*config->log)(LOG_DEBUG, "rec'd %ld response: %s %s", http_code, io->method, io->url);
-                    return EEXIST;
-                }
-                /* FALLTHROUGH */
-            default:
-                (*config->log)(LOG_ERR, "rec'd %ld response: %s %s", http_code, io->method, io->url);
-                pthread_mutex_lock(&priv->mutex);
-                switch (http_code / 100) {
-                case 4:
-                    priv->stats.http_4xx_error++;
-                    break;
-                case 5:
-                    priv->stats.http_5xx_error++;
-                    break;
-                default:
-                    priv->stats.http_other_error++;
-                    break;
-                }
-                pthread_mutex_unlock(&priv->mutex);
-                break;
-            }
-            break;
-        default:
-            (*config->log)(LOG_ERR, "operation failed: %s (%s)", curl_easy_strerror(curl_code),
-              total_pause >= config->max_retry_pause ? "final attempt" : "will retry");
-            pthread_mutex_lock(&priv->mutex);
-            switch (curl_code) {
-            case CURLE_OUT_OF_MEMORY:
-                priv->stats.curl_out_of_memory++;
-                break;
-            case CURLE_COULDNT_CONNECT:
-                priv->stats.curl_connect_failed++;
-                break;
-            case CURLE_COULDNT_RESOLVE_HOST:
-                priv->stats.curl_host_unknown++;
-                break;
-            default:
-                priv->stats.curl_other_error++;
-                break;
-            }
-            pthread_mutex_unlock(&priv->mutex);
-            break;
-        }
-
-        /* Retry with exponential backoff up to max total pause limit */
-        if (total_pause >= config->max_retry_pause)
-            break;
-        retry_pause = retry_pause > 0 ? retry_pause * 2 : config->initial_retry_pause;
-        if (total_pause + retry_pause > config->max_retry_pause)
-            retry_pause = config->max_retry_pause - total_pause;
-        delay.tv_sec = retry_pause / 1000;
-        delay.tv_nsec = (retry_pause % 1000) * 1000000;
-        nanosleep(&delay, NULL);            // TODO: check for EINTR
-
-        /* Update retry stats */
-        pthread_mutex_lock(&priv->mutex);
-        priv->stats.num_retries++;
-        priv->stats.retry_delay += retry_pause;
-        pthread_mutex_unlock(&priv->mutex);
-    }
-
-    /* Give up */
-    (*config->log)(LOG_ERR, "giving up on: %s %s", io->method, io->url);
-    return EIO;
-}
 
 /*
  * Compute S3 authorization hash using secret access key and add Authorization and SHA256 hash headers.
@@ -1789,13 +1481,13 @@ http_io_add_auth(struct http_io_private *priv, struct http_io *const io, time_t 
     const struct http_io_conf *const config = priv->config;
 
     /* Anything to do? */
-    if (config->accessId == NULL)
+    if (config->auth.u.s3.accessId == NULL)
         return 0;
 
     /* Which auth version? */
-    if (strcmp(config->authVersion, AUTH_VERSION_AWS2) == 0)
+    if (strcmp(config->auth.u.s3.authVersion, AUTH_VERSION_AWS2) == 0)
         return http_io_add_auth2(priv, io, now, payload, plen);
-    if (strcmp(config->authVersion, AUTH_VERSION_AWS4) == 0)
+    if (strcmp(config->auth.u.s3.authVersion, AUTH_VERSION_AWS4) == 0)
         return http_io_add_auth4(priv, io, now, payload, plen);
 
     /* Oops */
@@ -1832,8 +1524,8 @@ http_io_add_auth2(struct http_io_private *priv, struct http_io *const io, time_t
 
     /* Snapshot current credentials */
     pthread_mutex_lock(&priv->mutex);
-    snprintf(access_id, sizeof(access_id), "%s", config->accessId);
-    snprintf(access_key, sizeof(access_key), "%s", config->accessKey);
+    snprintf(access_id, sizeof(access_id), "%s", config->auth.u.s3.accessId);
+    snprintf(access_key, sizeof(access_key), "%s", config->auth.u.s3.accessKey);
     pthread_mutex_unlock(&priv->mutex);
 
     /* Initialize HMAC */
@@ -1963,9 +1655,9 @@ http_io_add_auth4(struct http_io_private *priv, struct http_io *const io, time_t
 
     /* Snapshot current credentials */
     pthread_mutex_lock(&priv->mutex);
-    snprintf(access_id, sizeof(access_id), "%s", config->accessId);
-    snprintf(access_key, sizeof(access_key), "%s%s", ACCESS_KEY_PREFIX, config->accessKey);
-    snprintf(iam_token, sizeof(iam_token), "%s", config->iam_token != NULL ? config->iam_token : "");
+    snprintf(access_id, sizeof(access_id), "%s", config->auth.u.s3.accessId);
+    snprintf(access_key, sizeof(access_key), "%s%s", ACCESS_KEY_PREFIX, config->auth.u.s3.accessKey);
+    snprintf(iam_token, sizeof(iam_token), "%s", config->auth.u.s3.iam_token != NULL ? config->auth.u.s3.iam_token : "");
     pthread_mutex_unlock(&priv->mutex);
 
     /* Extract host, URI path, and query parameters from URL */
@@ -2269,200 +1961,6 @@ http_io_get_mounted_flag_url(char *buf, size_t bufsiz, struct http_io_conf *conf
     assert(len < bufsiz);
 }
 
-/*
- * Add date header based on supplied time.
- */
-static void
-http_io_add_date(struct http_io_private *const priv, struct http_io *const io, time_t now)
-{
-    struct http_io_conf *const config = priv->config;
-    char buf[DATE_BUF_SIZE];
-    struct tm tm;
-
-    if (strcmp(config->authVersion, AUTH_VERSION_AWS2) == 0) {
-        strftime(buf, sizeof(buf), HTTP_DATE_BUF_FMT, gmtime_r(&now, &tm));
-        io->headers = http_io_add_header(io->headers, "%s: %s", HTTP_DATE_HEADER, buf);
-    } else {
-        strftime(buf, sizeof(buf), AWS_DATE_BUF_FMT, gmtime_r(&now, &tm));
-        io->headers = http_io_add_header(io->headers, "%s: %s", AWS_DATE_HEADER, buf);
-    }
-}
-
-static struct curl_slist *
-http_io_add_header(struct curl_slist *headers, const char *fmt, ...)
-{
-    char buf[1024];
-    va_list args;
-
-    va_start(args, fmt);
-    vsnprintf(buf, sizeof(buf), fmt, args);
-    headers = curl_slist_append(headers, buf);
-    va_end(args);
-    return headers;
-}
-
-static CURL *
-http_io_acquire_curl(struct http_io_private *priv, struct http_io *io)
-{
-    struct http_io_conf *const config = priv->config;
-    struct curl_holder *holder;
-    CURL *curl;
-
-    pthread_mutex_lock(&priv->mutex);
-    if ((holder = LIST_FIRST(&priv->curls)) != NULL) {
-        curl = holder->curl;
-        LIST_REMOVE(holder, link);
-        priv->stats.curl_handles_reused++;
-        pthread_mutex_unlock(&priv->mutex);
-        free(holder);
-        curl_easy_reset(curl);
-    } else {
-        priv->stats.curl_handles_created++;             // optimistic
-        pthread_mutex_unlock(&priv->mutex);
-        if ((curl = curl_easy_init()) == NULL) {
-            pthread_mutex_lock(&priv->mutex);
-            priv->stats.curl_handles_created--;         // undo optimistic
-            priv->stats.curl_other_error++;
-            pthread_mutex_unlock(&priv->mutex);
-            (*config->log)(LOG_ERR, "curl_easy_init() failed");
-            return NULL;
-        }
-    }
-    curl_easy_setopt(curl, CURLOPT_URL, io->url);
-    curl_easy_setopt(curl, CURLOPT_FAILONERROR, 1);
-    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1);
-    curl_easy_setopt(curl, CURLOPT_NOSIGNAL, (long)1);
-    curl_easy_setopt(curl, CURLOPT_TIMEOUT, (long)config->timeout);
-    curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 1);
-    curl_easy_setopt(curl, CURLOPT_USERAGENT, config->user_agent);
-    if (config->max_speed[HTTP_UPLOAD] != 0)
-        curl_easy_setopt(curl, CURLOPT_MAX_SEND_SPEED_LARGE, (curl_off_t)(config->max_speed[HTTP_UPLOAD] / 8));
-    if (config->max_speed[HTTP_DOWNLOAD] != 0)
-        curl_easy_setopt(curl, CURLOPT_MAX_RECV_SPEED_LARGE, (curl_off_t)(config->max_speed[HTTP_DOWNLOAD] / 8));
-    if (strncmp(io->url, "https", 5) == 0) {
-        if (config->insecure)
-            curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, (long)0);
-        if (config->cacert != NULL)
-            curl_easy_setopt(curl, CURLOPT_CAINFO, config->cacert);
-    }
-    if (config->debug_http)
-        curl_easy_setopt(curl, CURLOPT_VERBOSE, 1);
-    return curl;
-}
-
-static size_t
-http_io_curl_reader(const void *ptr, size_t size, size_t nmemb, void *stream)
-{
-    struct http_io *const io = (struct http_io *)stream;
-    struct http_io_bufs *const bufs = &io->bufs;
-    size_t total = size * nmemb;
-
-    if (total > bufs->rdremain)     /* should never happen */
-        total = bufs->rdremain;
-    memcpy(bufs->rddata, ptr, total);
-    bufs->rddata += total;
-    bufs->rdremain -= total;
-    return total;
-}
-
-static size_t
-http_io_curl_writer(void *ptr, size_t size, size_t nmemb, void *stream)
-{
-    struct http_io *const io = (struct http_io *)stream;
-    struct http_io_bufs *const bufs = &io->bufs;
-    size_t total = size * nmemb;
-
-    /* Check for canceled write */
-    if (io->check_cancel != NULL && (*io->check_cancel)(io->check_cancel_arg, io->block_num) != 0)
-        return CURL_READFUNC_ABORT;
-
-    /* Copy out data */
-    if (total > bufs->wrremain)     /* should never happen */
-        total = bufs->wrremain;
-    memcpy(ptr, bufs->wrdata, total);
-    bufs->wrdata += total;
-    bufs->wrremain -= total;
-    return total;
-}
-
-static size_t
-http_io_curl_header(void *ptr, size_t size, size_t nmemb, void *stream)
-{
-    struct http_io *const io = (struct http_io *)stream;
-    const size_t total = size * nmemb;
-    char fmtbuf[64];
-    char buf[1024];
-
-    /* Null-terminate header */
-    if (total > sizeof(buf) - 1)
-        return total;
-    memcpy(buf, ptr, total);
-    buf[total] = '\0';
-
-    /* Check for interesting headers */
-    (void)sscanf(buf, FILE_SIZE_HEADER ": %ju", &io->file_size);
-    (void)sscanf(buf, BLOCK_SIZE_HEADER ": %u", &io->block_size);
-
-    /* ETag header requires parsing */
-    if (strncasecmp(buf, ETAG_HEADER ":", sizeof(ETAG_HEADER)) == 0) {
-        char md5buf[MD5_DIGEST_LENGTH * 2 + 1];
-
-        snprintf(fmtbuf, sizeof(fmtbuf), " \"%%%uc\"", MD5_DIGEST_LENGTH * 2);
-        if (sscanf(buf + sizeof(ETAG_HEADER), fmtbuf, md5buf) == 1)
-            http_io_parse_hex(md5buf, io->md5, MD5_DIGEST_LENGTH);
-    }
-
-    /* "x-amz-meta-s3backer-hmac" header requires parsing */
-    if (strncasecmp(buf, HMAC_HEADER ":", sizeof(HMAC_HEADER)) == 0) {
-        char hmacbuf[SHA_DIGEST_LENGTH * 2 + 1];
-
-        snprintf(fmtbuf, sizeof(fmtbuf), " \"%%%uc\"", SHA_DIGEST_LENGTH * 2);
-        if (sscanf(buf + sizeof(HMAC_HEADER), fmtbuf, hmacbuf) == 1)
-            http_io_parse_hex(hmacbuf, io->hmac, SHA_DIGEST_LENGTH);
-    }
-
-    /* Content encoding(s) */
-    if (strncasecmp(buf, CONTENT_ENCODING_HEADER ":", sizeof(CONTENT_ENCODING_HEADER)) == 0) {
-        size_t celen;
-        char *state;
-        char *s;
-
-        *io->content_encoding = '\0';
-        for (s = strtok_r(buf + sizeof(CONTENT_ENCODING_HEADER), WHITESPACE ",", &state);
-          s != NULL; s = strtok_r(NULL, WHITESPACE ",", &state)) {
-            celen = strlen(io->content_encoding);
-            snprintf(io->content_encoding + celen, sizeof(io->content_encoding) - celen, "%s%s", celen > 0 ? "," : "", s);
-        }
-    }
-
-    /* Done */
-    return total;
-}
-
-static void
-http_io_release_curl(struct http_io_private *priv, CURL **curlp, int may_cache)
-{
-    struct curl_holder *holder;
-    CURL *const curl = *curlp;
-
-    *curlp = NULL;
-    assert(curl != NULL);
-    if (!may_cache) {
-        curl_easy_cleanup(curl);
-        return;
-    }
-    if ((holder = calloc(1, sizeof(*holder))) == NULL) {
-        curl_easy_cleanup(curl);
-        pthread_mutex_lock(&priv->mutex);
-        priv->stats.out_of_memory_errors++;
-        pthread_mutex_unlock(&priv->mutex);
-        return;
-    }
-    holder->curl = curl;
-    pthread_mutex_lock(&priv->mutex);
-    LIST_INSERT_HEAD(&priv->curls, holder, link);
-    pthread_mutex_unlock(&priv->mutex);
-}
 
 static void
 http_io_openssl_locker(int mode, int i, const char *file, int line)

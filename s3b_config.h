@@ -20,6 +20,11 @@
  * 02110-1301, USA.
  */
 
+#ifndef S3B_CONFIG_H
+#define S3B_CONFIG_H
+
+#include "http_gio.h"
+
 /* Overal application configuration info */
 struct s3b_config {
 
@@ -59,3 +64,4 @@ struct s3b_config {
 extern struct s3b_config *s3backer_get_config(int argc, char **argv);
 extern struct s3backer_store *s3backer_create_store(struct s3b_config *config);
 
+#endif

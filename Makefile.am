@@ -32,10 +32,12 @@ noinst_HEADERS=     s3backer.h \
 			erase.h \
 			fuse_ops.h \
 			hash.h \
-			http_io.h \
+			s3b_http_io.h \
 			reset.h \
 			test_io.h \
-			s3b_config.h
+			s3b_config.h \
+			auth_conf.h \
+			http_gio.h
 
 man_MANS=           s3backer.1
 
@@ -53,11 +55,12 @@ s3backer_SOURCES=   main.c \
 		    erase.c \
 		    fuse_ops.c \
 		    hash.c \
-		    http_io.c \
+		    s3b_http_io.c \
 		    reset.c \
 		    s3b_config.c \
 		    test_io.c \
-		    gitrev.c
+		    gitrev.c \
+		    http_gio.c
 
 tester_SOURCES=     tester.c \
 		    block_cache.c \
@@ -66,11 +69,12 @@ tester_SOURCES=     tester.c \
 		    ec_protect.c \
 		    erase.c \
 		    hash.c \
-		    http_io.c \
+		    s3b_http_io.c \
 		    reset.c \
 		    s3b_config.c \
 		    test_io.c \
-		    gitrev.c
+		    gitrev.c \
+		    http_gio.c
 
 AM_CFLAGS=          $(FUSE_CFLAGS)
 
