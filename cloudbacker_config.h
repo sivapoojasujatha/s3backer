@@ -26,13 +26,14 @@
 #include "http_gio.h"
 
 /* Overal application configuration info */
-struct s3b_config {
+typedef struct cloudbacker_config {
 
     /* Various sub-module configurations */
     struct block_cache_conf     block_cache;
     struct fuse_ops_conf        fuse_ops;
     struct ec_protect_conf      ec_protect;
     struct http_io_conf         http_io;
+    
 
     /* Common/global stuff */
     const char                  *accessFile;
@@ -59,9 +60,9 @@ struct s3b_config {
     const char                  *password_file;
     const char                  *max_speed_str[2];
     int                         encrypt;
-};
+}cloudbacker_config;
 
-extern struct s3b_config *s3backer_get_config(int argc, char **argv);
-extern struct s3backer_store *s3backer_create_store(struct s3b_config *config);
+extern cloudbacker_config *cloudbacker_get_config(int argc, char **argv);
+extern struct cloudbacker_store *cloudbacker_create_store(cloudbacker_config *config);
 
 #endif

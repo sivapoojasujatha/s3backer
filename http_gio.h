@@ -51,6 +51,8 @@
 #define HTTP_DOWNLOAD       0
 #define HTTP_UPLOAD         1
 
+typedef enum {GS_STORAGE, S3_STORAGE}storage_type;
+
 /* Statistics structure for http_io store */
 struct http_io_evst {
     u_int               count;                      // number of occurrences
@@ -152,7 +154,7 @@ struct http_io {
     int                 xml_text_len;           // # chars in 'xml_text' buffer
     int                 xml_text_max;           // max chars in 'xml_text' buffer
     int                 list_truncated;         // returned list was truncated
-    s3b_block_t         last_block;             // last dirty block listed
+    cb_block_t         last_block;             // last dirty block listed
     block_list_func_t   *callback_func;         // callback func for listing blocks
     void                *callback_arg;          // callback arg for listing blocks
     struct http_io_conf *config;                // configuration
@@ -163,7 +165,7 @@ struct http_io {
     struct curl_slist   *headers;               // HTTP headers
     void                *dest;                  // Block data (when reading)
     const void          *src;                   // Block data (when writing)
-    s3b_block_t         block_num;              // The block we're reading/writing
+    cb_block_t         block_num;              // The block we're reading/writing
     u_int               buf_size;               // Size of data buffer
     u_int               *content_lengthp;       // Returned Content-Length
     uintmax_t           file_size;              // file size from "x-amz-meta-s3backer-filesize"
@@ -176,12 +178,23 @@ struct http_io {
     void                *check_cancel_arg;      // write check-for-cancel callback argument
 };
 
+/* s3b structure to hold authentication related stuff     */
+struct http_io_s3b{
+    struct auth_conf    auth;
+};
+/* gsb structure to hold authentication related stuff     */
+struct http_io_gsb{
+    struct auth_conf    auth;
+};
+
 /* Generic configuration info structure for http_io store */
 struct http_io_conf {
-    struct auth_conf	auth;
+    //struct auth_conf	auth;
+    struct http_io_s3b  http_s3b;
+    struct http_io_gsb  http_gsb;
+    char       		*bucket;
     const char          *baseURL;
-    const char          *region;
-    const char          *bucket;
+    const char          *region;    
     const char          *prefix;
     const char          *user_agent;
     const char          *cacert;
@@ -194,6 +207,7 @@ struct http_io_conf {
     int                 rrs;                        // reduced redundancy storage
     int                 compress;                   // zlib compression level
     int                 vhost;                      // use virtual host style URL
+    int  		storage_prefix;             // GS_STORAGE or S3_STORAGE
     u_int               *nonzero_bitmap;            // is set to NULL by http_io_create()
     int                 insecure;
     u_int               block_size;
@@ -204,6 +218,11 @@ struct http_io_conf {
     uintmax_t           max_speed[2];
     log_func_t          *log;
 };
+
+/* Initialize function pointers specific to storage */
+struct cloudbacker_store *http_io_create(struct http_io_conf *config);
+void http_io_get_stats(struct cloudbacker_store *backerstore, struct http_io_stats *stats);
+int http_io_parse_block(struct http_io_conf *config, const char *name, cb_block_t *block_num);
 
 /* CURL prepper functions */
 typedef void http_io_curl_prepper_t(CURL *curl, struct http_io *io);
@@ -226,4 +245,17 @@ size_t http_io_curl_list_reader(const void *ptr, size_t size, size_t nmemb, void
 CURL *http_io_acquire_curl(struct http_io_private *priv, struct http_io *io);
 void http_io_release_curl(struct http_io_private *priv, CURL **curlp, int may_cache);
 
+int http_io_is_zero_block(const void *data, u_int block_size);
+int http_io_parse_hex(const char *str, u_char *buf, u_int nbytes);
+void http_io_prhex(char *buf, const u_char *data, size_t len);
+int http_io_strcasecmp_ptr(const void *ptr1, const void *ptr2);
+
+void http_io_openssl_locker(int mode, int i, const char *file, int line);
+u_long http_io_openssl_ider(void);
+void http_io_base64_encode(char *buf, size_t bufsiz, const void *data, size_t len);
+
+
+/* Internal variables */
+pthread_mutex_t *openssl_locks;
+int num_openssl_locks;
 #endif

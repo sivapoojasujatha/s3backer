@@ -20,7 +20,7 @@
  * 02110-1301, USA.
  */
 
-#include "s3backer.h"
+#include "cloudbacker.h"
 #include "block_part.h"
 #include "http_gio.h"
 #include "s3b_http_io.h"
@@ -37,7 +37,7 @@
 /* S3-specific HTTP definitions */
 #define FILE_SIZE_HEADER            "x-amz-meta-s3backer-filesize"
 #define BLOCK_SIZE_HEADER           "x-amz-meta-s3backer-blocksize"
-#define HMAC_HEADER                 "x-amz-meta-s3backer-hmac"
+#define HMAC_HEADER                 "x-amz-meta-cloudbacker.hmac"
 #define ACL_HEADER                  "x-amz-acl"
 #define CONTENT_SHA256_HEADER       "x-amz-content-sha256"
 #define STORAGE_CLASS_HEADER        "x-amz-storage-class"
@@ -96,30 +96,30 @@
 #define WHITESPACE                  " \t\v\f\r\n"
 
 /*
- * HTTP-based implementation of s3backer_store.
+ * HTTP-based implementation of cloudbacker_store.
  *
  * This implementation does no caching or consistency checking.
  */
 
-/* s3backer_store functions */
-static int http_io_meta_data(struct s3backer_store *s3b, off_t *file_sizep, u_int *block_sizep);
-static int http_io_set_mounted(struct s3backer_store *s3b, int *old_valuep, int new_value);
-static int http_io_read_block(struct s3backer_store *s3b, s3b_block_t block_num, void *dest,
+/* cloudbacker_store functions */
+int s3b_http_io_meta_data(struct cloudbacker_store *backerstore, off_t *file_sizep, u_int *block_sizep);
+int s3b_http_io_set_mounted(struct cloudbacker_store *backerstore, int *old_valuep, int new_value);
+int s3b_http_io_read_block(struct cloudbacker_store *backerstore, cb_block_t block_num, void *dest,
   u_char *actual_md5, const u_char *expect_md5, int strict);
-static int http_io_write_block(struct s3backer_store *s3b, s3b_block_t block_num, const void *src, u_char *md5,
+int s3b_http_io_write_block(struct cloudbacker_store *backerstore, cb_block_t block_num, const void *src, u_char *md5,
   check_cancel_t *check_cancel, void *check_cancel_arg);
-static int http_io_read_block_part(struct s3backer_store *s3b, s3b_block_t block_num, u_int off, u_int len, void *dest);
-static int http_io_write_block_part(struct s3backer_store *s3b, s3b_block_t block_num, u_int off, u_int len, const void *src);
-static int http_io_list_blocks(struct s3backer_store *s3b, block_list_func_t *callback, void *arg);
-static int http_io_flush(struct s3backer_store *s3b);
-static void http_io_destroy(struct s3backer_store *s3b);
+int s3b_http_io_read_block_part(struct cloudbacker_store *backerstore, cb_block_t block_num, u_int off, u_int len, void *dest);
+int s3b_http_io_write_block_part(struct cloudbacker_store *backerstore, cb_block_t block_num, u_int off, u_int len, const void *src);
+int s3b_http_io_list_blocks(struct cloudbacker_store *backerstore, block_list_func_t *callback, void *arg);
+int s3b_http_io_flush(struct cloudbacker_store *backerstore);
+void s3b_http_io_destroy(struct cloudbacker_store *backerstore);
 
 /* S3 REST API functions */
-static void http_io_get_block_url(char *buf, size_t bufsiz, struct http_io_conf *config, s3b_block_t block_num);
-static void http_io_get_mounted_flag_url(char *buf, size_t bufsiz, struct http_io_conf *config);
-static int http_io_add_auth(struct http_io_private *priv, struct http_io *io, time_t now, const void *payload, size_t plen);
-static int http_io_add_auth2(struct http_io_private *priv, struct http_io *io, time_t now, const void *payload, size_t plen);
-static int http_io_add_auth4(struct http_io_private *priv, struct http_io *io, time_t now, const void *payload, size_t plen);
+void s3b_http_io_get_block_url(char *buf, size_t bufsiz, struct http_io_conf *config, cb_block_t block_num);
+void s3b_http_io_get_mounted_flag_url(char *buf, size_t bufsiz, struct http_io_conf *config);
+int s3b_http_io_add_auth(struct http_io_private *priv, struct http_io *io, time_t now, const void *payload, size_t plen);
+int s3b_http_io_add_auth2(struct http_io_private *priv, struct http_io *io, time_t now, const void *payload, size_t plen);
+int s3b_http_io_add_auth4(struct http_io_private *priv, struct http_io *io, time_t now, const void *payload, size_t plen);
 
 /* EC2 IAM thread */
 static void *update_iam_credentials_main(void *arg);
@@ -132,17 +132,14 @@ static void http_io_list_elem_end(void *arg, const XML_Char *name);
 static void http_io_list_text(void *arg, const XML_Char *s, int len);
 
 /* Misc */
-static void http_io_openssl_locker(int mode, int i, const char *file, int line);
+/*static void http_io_openssl_locker(int mode, int i, const char *file, int line);
 static u_long http_io_openssl_ider(void);
-static void http_io_base64_encode(char *buf, size_t bufsiz, const void *data, size_t len);
-static u_int http_io_crypt(struct http_io_private *priv, s3b_block_t block_num, int enc, const u_char *src, u_int len, u_char *dst);
-static void http_io_authsig(struct http_io_private *priv, s3b_block_t block_num, const u_char *src, u_int len, u_char *hmac);
+static void http_io_base64_encode(char *buf, size_t bufsiz, const void *data, size_t len);*/
+static u_int http_io_crypt(struct http_io_private *priv, cb_block_t block_num, int enc, const u_char *src, u_int len, u_char *dst);
+static void http_io_authsig(struct http_io_private *priv, cb_block_t block_num, const u_char *src, u_int len, u_char *hmac);
 static void update_hmac_from_header(HMAC_CTX *ctx, struct http_io *io,
   const char *name, int value_only, char *sigbuf, size_t sigbuflen);
-static int http_io_is_zero_block(const void *data, u_int block_size);
-static int http_io_parse_hex(const char *str, u_char *buf, u_int nbytes);
-static void http_io_prhex(char *buf, const u_char *data, size_t len);
-static int http_io_strcasecmp_ptr(const void *ptr1, const void *ptr2);
+
 
 static void file_size_parser(char *buf, struct http_io *io);
 static void block_size_parser(char *buf, struct http_io *io);
@@ -151,8 +148,8 @@ static void hmac_parser(char *buf, struct http_io *io);
 static void encoding_parser(char *buf, struct http_io *io);
 
 /* Internal variables */
-static pthread_mutex_t *openssl_locks;
-static int num_openssl_locks;
+//static pthread_mutex_t *openssl_locks;
+//static int num_openssl_locks;
 static u_char zero_md5[MD5_DIGEST_LENGTH];
 static u_char zero_hmac[SHA_DIGEST_LENGTH];
 
@@ -167,10 +164,10 @@ static header_parser_t s3b_header_parser[] = {
  *
  * On error, returns NULL and sets `errno'.
  */
-struct s3backer_store *
-http_io_create(struct http_io_conf *config)
+struct cloudbacker_store *
+s3b_http_io_create(struct http_io_conf *config)
 {
-    struct s3backer_store *s3b;
+    struct cloudbacker_store *backerstore;
     struct http_io_private *priv;
     struct curl_holder *holder;
     int nlocks;
@@ -184,19 +181,19 @@ http_io_create(struct http_io_conf *config)
     }
 
     /* Initialize structures */
-    if ((s3b = calloc(1, sizeof(*s3b))) == NULL) {
+    if ((backerstore = calloc(1, sizeof(*backerstore))) == NULL) {
         r = errno;
         goto fail0;
     }
-    s3b->meta_data = http_io_meta_data;
-    s3b->set_mounted = http_io_set_mounted;
-    s3b->read_block = http_io_read_block;
-    s3b->write_block = http_io_write_block;
-    s3b->read_block_part = http_io_read_block_part;
-    s3b->write_block_part = http_io_write_block_part;
-    s3b->list_blocks = http_io_list_blocks;
-    s3b->flush = http_io_flush;
-    s3b->destroy = http_io_destroy;
+    backerstore->meta_data = s3b_http_io_meta_data;
+    backerstore->set_mounted = s3b_http_io_set_mounted;
+    backerstore->read_block = s3b_http_io_read_block;
+    backerstore->write_block = s3b_http_io_write_block;
+    backerstore->read_block_part = s3b_http_io_read_block_part;
+    backerstore->write_block_part = s3b_http_io_write_block_part;
+    backerstore->list_blocks = s3b_http_io_list_blocks;
+    backerstore->flush = s3b_http_io_flush;
+    backerstore->destroy = s3b_http_io_destroy;
     if ((priv = calloc(1, sizeof(*priv))) == NULL) {
         r = errno;
         goto fail1;
@@ -205,7 +202,7 @@ http_io_create(struct http_io_conf *config)
     if ((r = pthread_mutex_init(&priv->mutex, NULL)) != 0)
         goto fail2;
     LIST_INIT(&priv->curls);
-    s3b->data = priv;
+    backerstore->data = priv;
 
     /* Initialize openssl */
     num_openssl_locks = CRYPTO_num_locks();
@@ -283,7 +280,7 @@ http_io_create(struct http_io_conf *config)
     curl_global_init(CURL_GLOBAL_ALL);
 
     /* Initialize IAM credentials and start updater thread */
-    if (config->auth.u.s3.ec2iam_role != NULL) {
+    if (config->http_s3b.auth.u.s3.ec2iam_role != NULL) {
         if ((r = update_iam_credentials(priv)) != 0)
             goto fail5;
         if ((r = pthread_create(&priv->auth_thread, NULL, update_iam_credentials_main, priv)) != 0)
@@ -295,7 +292,7 @@ http_io_create(struct http_io_conf *config)
     config->nonzero_bitmap = NULL;
 
     /* Done */
-    return s3b;
+    return backerstore;
 
 fail5:
     while ((holder = LIST_FIRST(&priv->curls)) != NULL) {
@@ -317,7 +314,7 @@ fail3:
 fail2:
     free(priv);
 fail1:
-    free(s3b);
+    free(backerstore);
 fail0:
     (*config->log)(LOG_ERR, "http_io creation failed: %s", strerror(r));
     errno = r;
@@ -327,8 +324,8 @@ fail0:
 /*
  * Destructor
  */
-static void
-http_io_destroy(struct s3backer_store *const s3b)
+void
+s3b_http_io_destroy(struct cloudbacker_store *const s3b)
 {
     struct http_io_private *const priv = s3b->data;
     struct http_io_conf *const config = priv->config;
@@ -337,7 +334,7 @@ http_io_destroy(struct s3backer_store *const s3b)
 
     /* Shut down IAM thread */
     priv->shutting_down = 1;
-    if (config->auth.u.s3.ec2iam_role != NULL) {
+    if (config->http_s3b.auth.u.s3.ec2iam_role != NULL) {
         (*config->log)(LOG_DEBUG, "waiting for EC2 IAM thread to shutdown");
         if ((r = pthread_cancel(priv->auth_thread)) != 0)
             (*config->log)(LOG_ERR, "pthread_cancel: %s", strerror(r));
@@ -370,16 +367,16 @@ http_io_destroy(struct s3backer_store *const s3b)
     free(s3b);
 }
 
-static int
-http_io_flush(struct s3backer_store *const s3b)
+int
+s3b_http_io_flush(struct cloudbacker_store *const s3b)
 {
     return 0;
 }
 
 void
-http_io_get_stats(struct s3backer_store *s3b, struct http_io_stats *stats)
+http_io_get_stats(struct cloudbacker_store *backerstore, struct http_io_stats *stats)
 {
-    struct http_io_private *const priv = s3b->data;
+    struct http_io_private *const priv = backerstore->data;
 
     pthread_mutex_lock(&priv->mutex);
     memcpy(stats, &priv->stats, sizeof(*stats));
@@ -397,7 +394,7 @@ http_io_add_date(struct http_io_private *const priv, struct http_io *const io, t
     char buf[DATE_BUF_SIZE];
     struct tm tm;
 
-    if (strcmp(config->auth.u.s3.authVersion, AUTH_VERSION_AWS2) == 0) {
+    if (strcmp(config->http_s3b.auth.u.s3.authVersion, AUTH_VERSION_AWS2) == 0) {
         strftime(buf, sizeof(buf), HTTP_DATE_BUF_FMT, gmtime_r(&now, &tm));
         io->headers = http_io_add_header(io->headers, "%s: %s", HTTP_DATE_HEADER, buf);
     } else {
@@ -406,10 +403,10 @@ http_io_add_date(struct http_io_private *const priv, struct http_io *const io, t
     }
 }
 
-static int
-http_io_list_blocks(struct s3backer_store *s3b, block_list_func_t *callback, void *arg)
+int
+s3b_http_io_list_blocks(struct cloudbacker_store *backerstore, block_list_func_t *callback, void *arg)
 {
-    struct http_io_private *const priv = s3b->data;
+    struct http_io_private *const priv = backerstore->data;
     struct http_io_conf *const config = priv->config;
     char marker[sizeof("&marker=") + strlen(config->prefix) + S3B_BLOCK_NUM_DIGITS + 1];
     char urlbuf[URL_BUF_SIZE(config) + sizeof(marker) + 32];
@@ -468,7 +465,7 @@ http_io_list_blocks(struct s3backer_store *s3b, block_list_func_t *callback, voi
         http_io_add_date(priv, &io, now);
 
         /* Add Authorization header */
-        if ((r = http_io_add_auth(priv, &io, now, NULL, 0)) != 0)
+        if ((r = s3b_http_io_add_auth(priv, &io, now, NULL, 0)) != 0)
             goto fail;
 
         /* Perform operation */
@@ -597,7 +594,7 @@ static void
 http_io_list_elem_end(void *arg, const XML_Char *name)
 {
     struct http_io *const io = (struct http_io *)arg;
-    s3b_block_t block_num;
+    cb_block_t block_num;
 
     /* Handle <Truncated> tag */
     if (strcmp(io->xml_path, "/" LIST_ELEM_LIST_BUCKET_RESLT "/" LIST_ELEM_IS_TRUNCATED) == 0)
@@ -639,10 +636,10 @@ http_io_list_text(void *arg, const XML_Char *s, int len)
  * Parse a block's item name (including prefix) and set the corresponding bit in the bitmap.
  */
 int
-http_io_parse_block(struct http_io_conf *config, const char *name, s3b_block_t *block_nump)
+http_io_parse_block(struct http_io_conf *config, const char *name, cb_block_t *block_nump)
 {
     const size_t plen = strlen(config->prefix);
-    s3b_block_t block_num = 0;
+    cb_block_t block_num = 0;
     int i;
 
     /* Check prefix */
@@ -669,10 +666,10 @@ http_io_parse_block(struct http_io_conf *config, const char *name, s3b_block_t *
     return 0;
 }
 
-static int
-http_io_meta_data(struct s3backer_store *s3b, off_t *file_sizep, u_int *block_sizep)
+int
+s3b_http_io_meta_data(struct cloudbacker_store *backerstore, off_t *file_sizep, u_int *block_sizep)
 {
-    struct http_io_private *const priv = s3b->data;
+    struct http_io_private *const priv = backerstore->data;
     struct http_io_conf *const config = priv->config;
     char urlbuf[URL_BUF_SIZE(config)];
     const time_t now = time(NULL);
@@ -686,13 +683,13 @@ http_io_meta_data(struct s3backer_store *s3b, off_t *file_sizep, u_int *block_si
     io.method = HTTP_HEAD;
 
     /* Construct URL for the first block */
-    http_io_get_block_url(urlbuf, sizeof(urlbuf), config, 0);
+    s3b_http_io_get_block_url(urlbuf, sizeof(urlbuf), config, 0);
 
     /* Add Date header */
     http_io_add_date(priv, &io, now);
 
     /* Add Authorization header */
-    if ((r = http_io_add_auth(priv, &io, now, NULL, 0)) != 0)
+    if ((r = s3b_http_io_add_auth(priv, &io, now, NULL, 0)) != 0)
         goto done;
 
     /* Perform operation */
@@ -713,10 +710,10 @@ done:
     return r;
 }
 
-static int
-http_io_set_mounted(struct s3backer_store *s3b, int *old_valuep, int new_value)
+int
+s3b_http_io_set_mounted(struct cloudbacker_store *backerstore, int *old_valuep, int new_value)
 {
-    struct http_io_private *const priv = s3b->data;
+    struct http_io_private *const priv = backerstore->data;
     struct http_io_conf *const config = priv->config;
     char urlbuf[URL_BUF_SIZE(config) + sizeof(MOUNTED_FLAG)];
     const time_t now = time(NULL);
@@ -730,7 +727,7 @@ http_io_set_mounted(struct s3backer_store *s3b, int *old_valuep, int new_value)
     io.method = HTTP_HEAD;
 
     /* Construct URL for the mounted flag */
-    http_io_get_mounted_flag_url(urlbuf, sizeof(urlbuf), config);
+    s3b_http_io_get_mounted_flag_url(urlbuf, sizeof(urlbuf), config);
 
     /* Get old value */
     if (old_valuep != NULL) {
@@ -739,7 +736,7 @@ http_io_set_mounted(struct s3backer_store *s3b, int *old_valuep, int new_value)
         http_io_add_date(priv, &io, now);
 
         /* Add Authorization header */
-        if ((r = http_io_add_auth(priv, &io, now, NULL, 0)) != 0)
+        if ((r = s3b_http_io_add_auth(priv, &io, now, NULL, 0)) != 0)
             goto done;
 
         /* See if object exists */
@@ -796,14 +793,14 @@ http_io_set_mounted(struct s3backer_store *s3b, int *old_valuep, int new_value)
 
         /* Add ACL header (PUT only) */
         if (new_value)
-            io.headers = http_io_add_header(io.headers, "%s: %s", ACL_HEADER, config->auth.u.s3.accessType);
+            io.headers = http_io_add_header(io.headers, "%s: %s", ACL_HEADER, config->http_s3b.auth.u.s3.accessType);
 
         /* Add storage class header (if needed) */
         if (config->rrs)
             io.headers = http_io_add_header(io.headers, "%s: %s", STORAGE_CLASS_HEADER, SCLASS_REDUCED_REDUNDANCY);
 
         /* Add Authorization header */
-        if ((r = http_io_add_auth(priv, &io, now, io.src, io.buf_size)) != 0)
+        if ((r = s3b_http_io_add_auth(priv, &io, now, io.src, io.buf_size)) != 0)
             goto done;
 
         /* Perform operation to set or clear mounted flag */
@@ -843,7 +840,7 @@ update_iam_credentials(struct http_io_private *const priv)
     int r;
 
     /* Build URL */
-    snprintf(urlbuf, sizeof(urlbuf), "%s%s", EC2_IAM_META_DATA_URLBASE, config->auth.u.s3.ec2iam_role);
+    snprintf(urlbuf, sizeof(urlbuf), "%s%s", EC2_IAM_META_DATA_URLBASE, config->http_s3b.auth.u.s3.ec2iam_role);
 
     /* Initialize I/O info */
     memset(&io, 0, sizeof(io));
@@ -878,12 +875,12 @@ update_iam_credentials(struct http_io_private *const priv)
 
     /* Update credentials */
     pthread_mutex_lock(&priv->mutex);
-    free(config->auth.u.s3.accessId);
-    free(config->auth.u.s3.accessKey);
-    free(config->auth.u.s3.iam_token);
-    config->auth.u.s3.accessId = access_id;
-    config->auth.u.s3.accessKey = access_key;
-    config->auth.u.s3.iam_token = iam_token;
+    free(config->http_s3b.auth.u.s3.accessId);
+    free(config->http_s3b.auth.u.s3.accessKey);
+    free(config->http_s3b.auth.u.s3.iam_token);
+    config->http_s3b.auth.u.s3.accessId = access_id;
+    config->http_s3b.auth.u.s3.accessKey = access_key;
+    config->http_s3b.auth.u.s3.iam_token = iam_token;
     pthread_mutex_unlock(&priv->mutex);
     (*config->log)(LOG_INFO, "successfully updated EC2 IAM credentials from %s", io.url);
 
@@ -952,8 +949,8 @@ parse_json_field(struct http_io_private *priv, const char *json, const char *fie
     return value;
 }
 
-static int
-http_io_read_block(struct s3backer_store *const s3b, s3b_block_t block_num, void *dest,
+int
+s3b_http_io_read_block(struct cloudbacker_store *const s3b, cb_block_t block_num, void *dest,
   u_char *actual_md5, const u_char *expect_md5, int strict)
 {
     struct http_io_private *const priv = s3b->data;
@@ -1006,7 +1003,7 @@ http_io_read_block(struct s3backer_store *const s3b, s3b_block_t block_num, void
     }
 
     /* Construct URL for this block */
-    http_io_get_block_url(urlbuf, sizeof(urlbuf), config, block_num);
+    s3b_http_io_get_block_url(urlbuf, sizeof(urlbuf), config, block_num);
 
     /* Add Date header */
     http_io_add_date(priv, &io, now);
@@ -1027,7 +1024,7 @@ http_io_read_block(struct s3backer_store *const s3b, s3b_block_t block_num, void
     }
 
     /* Add Authorization header */
-    if ((r = http_io_add_auth(priv, &io, now, NULL, 0)) != 0)
+    if ((r = s3b_http_io_add_auth(priv, &io, now, NULL, 0)) != 0)
         goto fail;
 
     /* Perform operation */
@@ -1240,8 +1237,8 @@ fail:
 /*
  * Write block if src != NULL, otherwise delete block.
  */
-static int
-http_io_write_block(struct s3backer_store *const s3b, s3b_block_t block_num, const void *src, u_char *caller_md5,
+int
+s3b_http_io_write_block(struct cloudbacker_store *const s3b, cb_block_t block_num, const void *src, u_char *caller_md5,
   check_cancel_t *check_cancel, void *check_cancel_arg)
 {
     struct http_io_private *const priv = s3b->data;
@@ -1390,7 +1387,7 @@ http_io_write_block(struct s3backer_store *const s3b, s3b_block_t block_num, con
         memcpy(caller_md5, md5, MD5_DIGEST_LENGTH);
 
     /* Construct URL for this block */
-    http_io_get_block_url(urlbuf, sizeof(urlbuf), config, block_num);
+    s3b_http_io_get_block_url(urlbuf, sizeof(urlbuf), config, block_num);
 
     /* Add Date header */
     http_io_add_date(priv, &io, now);
@@ -1408,7 +1405,7 @@ http_io_write_block(struct s3backer_store *const s3b, s3b_block_t block_num, con
 
     /* Add ACL header (PUT only) */
     if (src != NULL)
-        io.headers = http_io_add_header(io.headers, "%s: %s", ACL_HEADER, config->auth.u.s3.accessType);
+        io.headers = http_io_add_header(io.headers, "%s: %s", ACL_HEADER, config->http_s3b.auth.u.s3.accessType);
 
     /* Add file size meta-data to zero'th block */
     if (src != NULL && block_num == 0) {
@@ -1426,7 +1423,7 @@ http_io_write_block(struct s3backer_store *const s3b, s3b_block_t block_num, con
         io.headers = http_io_add_header(io.headers, "%s: %s", STORAGE_CLASS_HEADER, SCLASS_REDUCED_REDUNDANCY);
 
     /* Add Authorization header */
-    if ((r = http_io_add_auth(priv, &io, now, io.src, io.buf_size)) != 0)
+    if ((r = s3b_http_io_add_auth(priv, &io, now, io.src, io.buf_size)) != 0)
         goto fail;
 
     /* Perform operation */
@@ -1451,22 +1448,22 @@ fail:
 }
 
 
-static int
-http_io_read_block_part(struct s3backer_store *s3b, s3b_block_t block_num, u_int off, u_int len, void *dest)
+int
+s3b_http_io_read_block_part(struct cloudbacker_store *backerstore, cb_block_t block_num, u_int off, u_int len, void *dest)
 {
-    struct http_io_private *const priv = s3b->data;
+    struct http_io_private *const priv = backerstore->data;
     struct http_io_conf *const config = priv->config;
 
-    return block_part_read_block_part(s3b, block_num, config->block_size, off, len, dest);
+    return block_part_read_block_part(backerstore, block_num, config->block_size, off, len, dest);
 }
 
-static int
-http_io_write_block_part(struct s3backer_store *s3b, s3b_block_t block_num, u_int off, u_int len, const void *src)
+int
+s3b_http_io_write_block_part(struct cloudbacker_store *backerstore, cb_block_t block_num, u_int off, u_int len, const void *src)
 {
-    struct http_io_private *const priv = s3b->data;
+    struct http_io_private *const priv = backerstore->data;
     struct http_io_conf *const config = priv->config;
 
-    return block_part_write_block_part(s3b, block_num, config->block_size, off, len, src);
+    return block_part_write_block_part(backerstore, block_num, config->block_size, off, len, src);
 }
 
 
@@ -1475,20 +1472,20 @@ http_io_write_block_part(struct s3backer_store *s3b, s3b_block_t block_num, u_in
  *
  * Note: headers must be unique and not wrapped.
  */
-static int
-http_io_add_auth(struct http_io_private *priv, struct http_io *const io, time_t now, const void *payload, size_t plen)
+int
+s3b_http_io_add_auth(struct http_io_private *priv, struct http_io *const io, time_t now, const void *payload, size_t plen)
 {
     const struct http_io_conf *const config = priv->config;
 
     /* Anything to do? */
-    if (config->auth.u.s3.accessId == NULL)
+    if (config->http_s3b.auth.u.s3.accessId == NULL)
         return 0;
 
     /* Which auth version? */
-    if (strcmp(config->auth.u.s3.authVersion, AUTH_VERSION_AWS2) == 0)
-        return http_io_add_auth2(priv, io, now, payload, plen);
-    if (strcmp(config->auth.u.s3.authVersion, AUTH_VERSION_AWS4) == 0)
-        return http_io_add_auth4(priv, io, now, payload, plen);
+    if (strcmp(config->http_s3b.auth.u.s3.authVersion, AUTH_VERSION_AWS2) == 0)
+        return s3b_http_io_add_auth2(priv, io, now, payload, plen);
+    if (strcmp(config->http_s3b.auth.u.s3.authVersion, AUTH_VERSION_AWS4) == 0)
+        return s3b_http_io_add_auth4(priv, io, now, payload, plen);
 
     /* Oops */
     return EINVAL;
@@ -1497,8 +1494,8 @@ http_io_add_auth(struct http_io_private *priv, struct http_io *const io, time_t 
 /**
  * AWS verison 2 authentication
  */
-static int
-http_io_add_auth2(struct http_io_private *priv, struct http_io *const io, time_t now, const void *payload, size_t plen)
+int
+s3b_http_io_add_auth2(struct http_io_private *priv, struct http_io *const io, time_t now, const void *payload, size_t plen)
 {
     const struct http_io_conf *const config = priv->config;
     const struct curl_slist *header;
@@ -1524,8 +1521,8 @@ http_io_add_auth2(struct http_io_private *priv, struct http_io *const io, time_t
 
     /* Snapshot current credentials */
     pthread_mutex_lock(&priv->mutex);
-    snprintf(access_id, sizeof(access_id), "%s", config->auth.u.s3.accessId);
-    snprintf(access_key, sizeof(access_key), "%s", config->auth.u.s3.accessKey);
+    snprintf(access_id, sizeof(access_id), "%s", config->http_s3b.auth.u.s3.accessId);
+    snprintf(access_key, sizeof(access_key), "%s", config->http_s3b.auth.u.s3.accessKey);
     pthread_mutex_unlock(&priv->mutex);
 
     /* Initialize HMAC */
@@ -1610,8 +1607,8 @@ fail:
 /**
  * AWS verison 4 authentication
  */
-static int
-http_io_add_auth4(struct http_io_private *priv, struct http_io *const io, time_t now, const void *payload, size_t plen)
+int
+s3b_http_io_add_auth4(struct http_io_private *priv, struct http_io *const io, time_t now, const void *payload, size_t plen)
 {
     const struct http_io_conf *const config = priv->config;
     u_char payload_hash[EVP_MAX_MD_SIZE];
@@ -1655,9 +1652,9 @@ http_io_add_auth4(struct http_io_private *priv, struct http_io *const io, time_t
 
     /* Snapshot current credentials */
     pthread_mutex_lock(&priv->mutex);
-    snprintf(access_id, sizeof(access_id), "%s", config->auth.u.s3.accessId);
-    snprintf(access_key, sizeof(access_key), "%s%s", ACCESS_KEY_PREFIX, config->auth.u.s3.accessKey);
-    snprintf(iam_token, sizeof(iam_token), "%s", config->auth.u.s3.iam_token != NULL ? config->auth.u.s3.iam_token : "");
+    snprintf(access_id, sizeof(access_id), "%s", config->http_s3b.auth.u.s3.accessId);
+    snprintf(access_key, sizeof(access_key), "%s%s", ACCESS_KEY_PREFIX, config->http_s3b.auth.u.s3.accessKey);
+    snprintf(iam_token, sizeof(iam_token), "%s", config->http_s3b.auth.u.s3.iam_token != NULL ? config->http_s3b.auth.u.s3.iam_token : "");
     pthread_mutex_unlock(&priv->mutex);
 
     /* Extract host, URI path, and query parameters from URL */
@@ -1912,10 +1909,10 @@ fail:
 /*
  * Improve S3 name hashing by reversing the bit sequence of the block number
  */
-static s3b_block_t bit_reverse(s3b_block_t block_num)
+static cb_block_t bit_reverse(cb_block_t block_num)
 {
-    int nbits = sizeof(s3b_block_t) * 8;
-    s3b_block_t reversed_block_num = (s3b_block_t)0;
+    int nbits = sizeof(cb_block_t) * 8;
+    cb_block_t reversed_block_num = (cb_block_t)0;
     int b, ib;
 
     if (block_num == 0) return block_num;
@@ -1928,8 +1925,8 @@ static s3b_block_t bit_reverse(s3b_block_t block_num)
     return reversed_block_num;
 }
 
-static void
-http_io_get_block_url(char *buf, size_t bufsiz, struct http_io_conf *config, s3b_block_t block_num)
+void
+s3b_http_io_get_block_url(char *buf, size_t bufsiz, struct http_io_conf *config, cb_block_t block_num)
 {
     int len;
 
@@ -1948,8 +1945,8 @@ http_io_get_block_url(char *buf, size_t bufsiz, struct http_io_conf *config, s3b
 /*
  * Create URL for the mounted flag, and return pointer to the URL's path not including any "/bucket" prefix.
  */
-static void
-http_io_get_mounted_flag_url(char *buf, size_t bufsiz, struct http_io_conf *config)
+void
+s3b_http_io_get_mounted_flag_url(char *buf, size_t bufsiz, struct http_io_conf *config)
 {
     int len;
 
@@ -1962,60 +1959,13 @@ http_io_get_mounted_flag_url(char *buf, size_t bufsiz, struct http_io_conf *conf
 }
 
 
-static void
-http_io_openssl_locker(int mode, int i, const char *file, int line)
-{
-    if ((mode & CRYPTO_LOCK) != 0)
-        pthread_mutex_lock(&openssl_locks[i]);
-    else
-        pthread_mutex_unlock(&openssl_locks[i]);
-}
 
-static u_long
-http_io_openssl_ider(void)
-{
-    return (u_long)pthread_self();
-}
-
-static void
-http_io_base64_encode(char *buf, size_t bufsiz, const void *data, size_t len)
-{
-    BUF_MEM *bptr;
-    BIO* bmem;
-    BIO* b64;
-
-    b64 = BIO_new(BIO_f_base64());
-    bmem = BIO_new(BIO_s_mem());
-    b64 = BIO_push(b64, bmem);
-    BIO_write(b64, data, len);
-    (void)BIO_flush(b64);
-    BIO_get_mem_ptr(b64, &bptr);
-    snprintf(buf, bufsiz, "%.*s", (int)bptr->length - 1, (char *)bptr->data);
-    BIO_free_all(b64);
-}
-
-static int
-http_io_is_zero_block(const void *data, u_int block_size)
-{
-    static const u_long zero;
-    const u_int *ptr;
-    int i;
-
-    if (block_size <= sizeof(zero))
-        return memcmp(data, &zero, block_size) == 0;
-    ptr = (const u_int *)data;
-    for (i = 0; i < block_size / sizeof(*ptr); i++) {
-        if (*ptr++ != 0)
-            return 0;
-    }
-    return 1;
-}
 
 /*
  * Encrypt or decrypt one block
  */
 static u_int
-http_io_crypt(struct http_io_private *priv, s3b_block_t block_num, int enc, const u_char *src, u_int len, u_char *dest)
+http_io_crypt(struct http_io_private *priv, cb_block_t block_num, int enc, const u_char *src, u_int len, u_char *dest)
 {
     u_char ivec[EVP_MAX_IV_LENGTH];
     EVP_CIPHER_CTX ctx;
@@ -2080,7 +2030,7 @@ http_io_crypt(struct http_io_private *priv, s3b_block_t block_num, int enc, cons
 }
 
 static void
-http_io_authsig(struct http_io_private *priv, s3b_block_t block_num, const u_char *src, u_int len, u_char *hmac)
+http_io_authsig(struct http_io_private *priv, cb_block_t block_num, const u_char *src, u_int len, u_char *hmac)
 {
     const char *const ciphername = EVP_CIPHER_name(priv->cipher);
     char blockbuf[64];
@@ -2135,56 +2085,8 @@ update_hmac_from_header(HMAC_CTX *const ctx, struct http_io *const io,
 #endif
 }
 
-/*
- * Parse exactly "nbytes" contiguous 2-digit hex bytes.
- * On failure, zero out the buffer and return -1.
- */
-static int
-http_io_parse_hex(const char *str, u_char *buf, u_int nbytes)
-{
-    int i;
 
-    /* Parse hex string */
-    for (i = 0; i < nbytes; i++) {
-        int byte;
-        int j;
 
-        for (byte = j = 0; j < 2; j++) {
-            const char ch = str[2 * i + j];
 
-            if (!isxdigit(ch)) {
-                memset(buf, 0, nbytes);
-                return -1;
-            }
-            byte <<= 4;
-            byte |= ch <= '9' ? ch - '0' : tolower(ch) - 'a' + 10;
-        }
-        buf[i] = byte;
-    }
 
-    /* Done */
-    return 0;
-}
-
-static void
-http_io_prhex(char *buf, const u_char *data, size_t len)
-{
-    static const char *hexdig = "0123456789abcdef";
-    int i;
-
-    for (i = 0; i < len; i++) {
-        buf[i * 2 + 0] = hexdig[data[i] >> 4];
-        buf[i * 2 + 1] = hexdig[data[i] & 0x0f];
-    }
-    buf[i * 2] = '\0';
-}
-
-static int
-http_io_strcasecmp_ptr(const void *const ptr1, const void *const ptr2)
-{
-    const char *const str1 = *(const char *const *)ptr1;
-    const char *const str2 = *(const char *const *)ptr2;
-
-    return strcasecmp(str1, str2);
-}
 

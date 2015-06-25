@@ -51,6 +51,6 @@ struct block_cache_stats {
 };
 
 /* block_cache.c */
-extern struct s3backer_store *block_cache_create(struct block_cache_conf *config, struct s3backer_store *inner);
-extern void block_cache_get_stats(struct s3backer_store *s3b, struct block_cache_stats *stats);
+extern struct cloudbacker_store *block_cache_create(struct block_cache_conf *config, struct cloudbacker_store *inner);
+extern void block_cache_get_stats(struct cloudbacker_store *backerstore, struct block_cache_stats *stats);
 

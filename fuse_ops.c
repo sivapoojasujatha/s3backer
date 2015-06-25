@@ -20,12 +20,12 @@
  * 02110-1301, USA.
  */
 
-#include "s3backer.h"
+#include "cloudbacker.h"
 #include "block_cache.h"
 #include "ec_protect.h"
 #include "fuse_ops.h"
 #include "s3b_http_io.h"
-#include "s3b_config.h"
+#include "cloudbacker_config.h"
 
 /****************************************************************************
  *                              DEFINITIONS                                 *
@@ -45,7 +45,7 @@ struct stat_file {
 
 /* Private information */
 struct fuse_ops_private {
-    struct s3backer_store   *s3b;
+    struct cloudbacker_store   *backerstore;
     u_int                   block_bits;
     off_t                   file_size;
     time_t                  start_time;
@@ -93,7 +93,7 @@ static printer_t fuse_op_stats_printer;
  ****************************************************************************/
 
 /* FUSE operations */
-const struct fuse_operations s3backer_fuse_ops = {
+const struct fuse_operations cloudbacker_fuse_ops = {
     .init       = fuse_op_init,
     .destroy    = fuse_op_destroy,
     .getattr    = fuse_op_getattr,
@@ -112,7 +112,7 @@ const struct fuse_operations s3backer_fuse_ops = {
 #endif
 };
 
-/* Configuration and underlying s3backer_store */
+/* Configuration and underlying cloudbacker_store */
 static struct fuse_ops_conf *config;
 
 /****************************************************************************
@@ -123,11 +123,11 @@ const struct fuse_operations *
 fuse_ops_create(struct fuse_ops_conf *config0)
 {
     if (config != NULL) {
-        (*config0->log)(LOG_ERR, "s3backer_get_fuse_ops(): duplicate invocation");
+        (*config0->log)(LOG_ERR, "cloudbacker_get_fuse_ops(): duplicate invocation");
         return NULL;
     }
     config = config0;
-    return &s3backer_fuse_ops;
+    return &cloudbacker_fuse_ops;
 }
 
 /****************************************************************************
@@ -137,7 +137,7 @@ fuse_ops_create(struct fuse_ops_conf *config0)
 static void *
 fuse_op_init(struct fuse_conn_info *conn)
 {
-    struct s3b_config *const s3bconf = config->s3bconf;
+    cloudbacker_config *const cb_conf = config->backerconf;
     struct fuse_ops_private *priv;
 
     /* Create private structure */
@@ -153,14 +153,14 @@ fuse_op_init(struct fuse_conn_info *conn)
     priv->file_size = config->num_blocks * config->block_size;
 
     /* Create backing store */
-    if ((priv->s3b = s3backer_create_store(s3bconf)) == NULL) {
-        (*config->log)(LOG_ERR, "fuse_op_init(): can't create s3backer_store: %s", strerror(errno));
+    if ((priv->backerstore = cloudbacker_create_store(cb_conf)) == NULL) {
+        (*config->log)(LOG_ERR, "fuse_op_init(): can't create cloudbacker_store: %s", strerror(errno));
         free(priv);
         return NULL;
     }
 
     /* Done */
-    (*config->log)(LOG_INFO, "mounting %s", s3bconf->mount);
+    (*config->log)(LOG_INFO, "mounting %s", cb_conf->mount);
     return priv;
 }
 
@@ -168,32 +168,32 @@ static void
 fuse_op_destroy(void *data)
 {
     struct fuse_ops_private *const priv = data;
-    struct s3backer_store *const s3b = priv != NULL ? priv->s3b : NULL;
-    struct s3b_config *const s3bconf = config->s3bconf;
+    struct cloudbacker_store *const backerstore = priv != NULL ? priv->backerstore : NULL;
+    cloudbacker_config *const cb_conf = config->backerconf;
     int r;
 
     /* Sanity check */
-    if (priv == NULL || s3b == NULL)
+    if (priv == NULL || backerstore == NULL)
         return;
-    (*config->log)(LOG_INFO, "unmount %s: initiated", s3bconf->mount);
+    (*config->log)(LOG_INFO, "unmount %s: initiated", cb_conf->mount);
 
     /* Flush dirty data */
     if (!config->read_only) {
-        (*config->log)(LOG_INFO, "unmount %s: flushing dirty data", s3bconf->mount);
-        if ((r = (*s3b->flush)(s3b)) != 0)
-            (*config->log)(LOG_ERR, "unmount %s: flushing filesystem failed: %s", s3bconf->mount, strerror(r));
+        (*config->log)(LOG_INFO, "unmount %s: flushing dirty data", cb_conf->mount);
+        if ((r = (*backerstore->flush)(backerstore)) != 0)
+            (*config->log)(LOG_ERR, "unmount %s: flushing filesystem failed: %s", cb_conf->mount, strerror(r));
     }
 
     /* Clear mounted flag */
     if (!config->read_only) {
-        (*config->log)(LOG_INFO, "unmount %s: clearing mounted flag", s3bconf->mount);
-        if ((r = (*s3b->set_mounted)(s3b, NULL, 0)) != 0)
-            (*config->log)(LOG_ERR, "unmount %s: clearing mounted flag failed: %s", s3bconf->mount, strerror(r));
+        (*config->log)(LOG_INFO, "unmount %s: clearing mounted flag", cb_conf->mount);
+        if ((r = (*backerstore->set_mounted)(backerstore, NULL, 0)) != 0)
+            (*config->log)(LOG_ERR, "unmount %s: clearing mounted flag failed: %s", cb_conf->mount, strerror(r));
     }
 
     /* Shutdown */
-    (*s3b->destroy)(s3b);
-    (*config->log)(LOG_INFO, "unmount %s: completed", s3bconf->mount);
+    (*backerstore->destroy)(backerstore);
+    (*config->log)(LOG_INFO, "unmount %s: completed", cb_conf->mount);
     free(priv);
 }
 
@@ -357,7 +357,7 @@ fuse_op_read(const char *path, char *buf, size_t size, off_t offset,
     struct fuse_ops_private *const priv = (struct fuse_ops_private *)fuse_get_context()->private_data;
     const u_int mask = config->block_size - 1;
     size_t orig_size = size;
-    s3b_block_t block_num;
+    cb_block_t block_num;
     size_t num_blocks;
     int r;
 
@@ -392,7 +392,7 @@ fuse_op_read(const char *path, char *buf, size_t size, off_t offset,
         if (fraglen > size)
             fraglen = size;
         block_num = offset >> priv->block_bits;
-        if ((r = (*priv->s3b->read_block_part)(priv->s3b, block_num, fragoff, fraglen, buf)) != 0)
+        if ((r = (*priv->backerstore->read_block_part)(priv->backerstore, block_num, fragoff, fraglen, buf)) != 0)
             return -r;
         buf += fraglen;
         offset += fraglen;
@@ -405,7 +405,7 @@ fuse_op_read(const char *path, char *buf, size_t size, off_t offset,
 
     /* Read intermediate complete blocks */
     while (num_blocks-- > 0) {
-        if ((r = (*priv->s3b->read_block)(priv->s3b, block_num++, buf, NULL, NULL, 0)) != 0)
+        if ((r = (*priv->backerstore->read_block)(priv->backerstore, block_num++, buf, NULL, NULL, 0)) != 0)
             return -r;
         buf += config->block_size;
     }
@@ -414,7 +414,7 @@ fuse_op_read(const char *path, char *buf, size_t size, off_t offset,
     if ((size & mask) != 0) {
         const size_t fraglen = size & mask;
 
-        if ((r = (*priv->s3b->read_block_part)(priv->s3b, block_num, 0, fraglen, buf)) != 0)
+        if ((r = (*priv->backerstore->read_block_part)(priv->backerstore, block_num, 0, fraglen, buf)) != 0)
             return -r;
     }
 
@@ -429,7 +429,7 @@ static int fuse_op_write(const char *path, const char *buf, size_t size,
     struct fuse_ops_private *const priv = (struct fuse_ops_private *)fuse_get_context()->private_data;
     const u_int mask = config->block_size - 1;
     size_t orig_size = size;
-    s3b_block_t block_num;
+    cb_block_t block_num;
     size_t num_blocks;
     int r;
 
@@ -463,7 +463,7 @@ static int fuse_op_write(const char *path, const char *buf, size_t size,
         if (fraglen > size)
             fraglen = size;
         block_num = offset >> priv->block_bits;
-        if ((r = (*priv->s3b->write_block_part)(priv->s3b, block_num, fragoff, fraglen, buf)) != 0)
+        if ((r = (*priv->backerstore->write_block_part)(priv->backerstore, block_num, fragoff, fraglen, buf)) != 0)
             return -r;
         buf += fraglen;
         offset += fraglen;
@@ -476,7 +476,7 @@ static int fuse_op_write(const char *path, const char *buf, size_t size,
 
     /* Write intermediate complete blocks */
     while (num_blocks-- > 0) {
-        if ((r = (*priv->s3b->write_block)(priv->s3b, block_num++, buf, NULL, NULL, NULL)) != 0)
+        if ((r = (*priv->backerstore->write_block)(priv->backerstore, block_num++, buf, NULL, NULL, NULL)) != 0)
             return -r;
         buf += config->block_size;
     }
@@ -485,7 +485,7 @@ static int fuse_op_write(const char *path, const char *buf, size_t size,
     if ((size & mask) != 0) {
         const size_t fraglen = size & mask;
 
-        if ((r = (*priv->s3b->write_block_part)(priv->s3b, block_num, 0, fraglen, buf)) != 0)
+        if ((r = (*priv->backerstore->write_block_part)(priv->backerstore, block_num, 0, fraglen, buf)) != 0)
             return -r;
     }
 
@@ -533,7 +533,7 @@ fuse_op_fallocate(const char *path, int mode, off_t offset, off_t len, struct fu
     struct fuse_ops_private *const priv = (struct fuse_ops_private *)fuse_get_context()->private_data;
     const u_int mask = config->block_size - 1;
     size_t size = (size_t)len;
-    s3b_block_t block_num;
+    cb_block_t block_num;
     void *zero_block;
     size_t num_blocks;
     int r;

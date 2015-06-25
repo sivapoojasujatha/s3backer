@@ -20,14 +20,14 @@
  * 02110-1301, USA.
  */
 
-#include "s3backer.h"
+#include "cloudbacker.h"
 #include "block_part.h"
 
 /*
  * Generic "dumb" implementation of the read_block_part function.
  */
 int
-block_part_read_block_part(struct s3backer_store *s3b, s3b_block_t block_num,
+block_part_read_block_part(struct cloudbacker_store *backerstore, cb_block_t block_num,
     u_int block_size, u_int off, u_int len, void *dest)
 {
     u_char *buf;
@@ -42,14 +42,14 @@ block_part_read_block_part(struct s3backer_store *s3b, s3b_block_t block_num,
     if (len == 0)
         return 0;
     if (off == 0 && len == block_size)
-        return (*s3b->read_block)(s3b, block_num, dest, NULL, NULL, 0);
+        return (*backerstore->read_block)(backerstore, block_num, dest, NULL, NULL, 0);
 
     /* Allocate buffer */
     if ((buf = malloc(block_size)) == NULL)
         return errno;
 
     /* Read entire block */
-    if ((r = (*s3b->read_block)(s3b, block_num, buf, NULL, NULL, 0)) != 0) {
+    if ((r = (*backerstore->read_block)(backerstore, block_num, buf, NULL, NULL, 0)) != 0) {
         free(buf);
         return r;
     }
@@ -66,7 +66,7 @@ block_part_read_block_part(struct s3backer_store *s3b, s3b_block_t block_num,
  * Generic "dumb" implementation of the write_block_part function.
  */
 int
-block_part_write_block_part(struct s3backer_store *s3b, s3b_block_t block_num,
+block_part_write_block_part(struct cloudbacker_store *backerstore, cb_block_t block_num,
     u_int block_size, u_int off, u_int len, const void *src)
 {
     u_char *buf;
@@ -81,14 +81,14 @@ block_part_write_block_part(struct s3backer_store *s3b, s3b_block_t block_num,
     if (len == 0)
         return 0;
     if (off == 0 && len == block_size)
-        return (*s3b->write_block)(s3b, block_num, src, NULL, NULL, NULL);
+        return (*backerstore->write_block)(backerstore, block_num, src, NULL, NULL, NULL);
 
     /* Allocate buffer */
     if ((buf = malloc(block_size)) == NULL)
         return errno;
 
     /* Read entire block */
-    if ((r = (*s3b->read_block)(s3b, block_num, buf, NULL, NULL, 0)) != 0) {
+    if ((r = (*backerstore->read_block)(backerstore, block_num, buf, NULL, NULL, 0)) != 0) {
         free(buf);
         return r;
     }
@@ -97,7 +97,7 @@ block_part_write_block_part(struct s3backer_store *s3b, s3b_block_t block_num,
     memcpy(buf + off, src, len);
 
     /* Write back entire block */
-    if ((r = (*s3b->write_block)(s3b, block_num, buf, NULL, NULL, NULL)) != 0) {
+    if ((r = (*backerstore->write_block)(backerstore, block_num, buf, NULL, NULL, NULL)) != 0) {
         free(buf);
         return r;
     }

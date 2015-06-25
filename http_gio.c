@@ -20,10 +20,58 @@
  * 02110-1301, USA.
  */
 
-#include "s3backer.h"
+#include "cloudbacker.h"
 #include "s3b_http_io.h"
 #include "http_gio.h"
 
+/*
+Initialize storage specific function pointers
+*/
+
+struct cloudbacker_store *
+http_io_create(struct http_io_conf *config)
+{
+    int r;
+    struct cloudbacker_store *backerstore;
+ 
+    /* Initialize structures */
+    if ((backerstore = calloc(1, sizeof(*backerstore))) == NULL) {
+        r = errno;
+        (*config->log)(LOG_ERR, "http_io creation failed: %s", strerror(r));
+        return NULL;
+    }   
+
+    if(config->storage_prefix == GS_STORAGE){
+        // backerstore = gsb_http_io_create(config);
+    }
+    else if(config->storage_prefix == S3_STORAGE){
+        backerstore = s3b_http_io_create(config);
+    }
+    return backerstore;
+}
+
+/*int
+http_io_parse_block(struct http_io_conf *config, const char *name, cb_block_t *block_nump){
+    int r = 0;
+    if(config->storage_prefix == GS_STORAGE){
+        // r = gsb_http_io_parse_block(config, name, *block_nump);
+    }
+    else if(config->storage_prefix == S3_STORAGE){
+        r = s3b_http_io_parse_block(config, name, *block_nump);
+    }
+
+    return r;
+}
+void
+http_io_get_stats(struct cloudbacker_store *backerstore, struct http_io_stats *stats){
+
+    if(config->storage_prefix == GS_STORAGE){
+       gsb_http_io_get_stats(backerstore, stats);
+    }
+    else if(config->storage_prefix == S3_STORAGE){
+       s3b_http_io_get_stats(backerstore, stats);
+    }
+}*/
 /*
  * Perform HTTP operation.
  */
@@ -459,4 +507,107 @@ http_io_curl_list_reader(const void *ptr, size_t size, size_t nmemb, void *strea
         io->xml_error_column = XML_GetCurrentColumnNumber(io->xml);
     }
     return total;
+}
+
+
+int
+http_io_strcasecmp_ptr(const void *const ptr1, const void *const ptr2)
+{
+    const char *const str1 = *(const char *const *)ptr1;
+    const char *const str2 = *(const char *const *)ptr2;
+
+    return strcasecmp(str1, str2);
+}
+
+void
+http_io_prhex(char *buf, const u_char *data, size_t len)
+{
+    static const char *hexdig = "0123456789abcdef";
+    int i;
+
+    for (i = 0; i < len; i++) {
+        buf[i * 2 + 0] = hexdig[data[i] >> 4];
+        buf[i * 2 + 1] = hexdig[data[i] & 0x0f];
+    }
+    buf[i * 2] = '\0';
+}
+
+/*
+ * Parse exactly "nbytes" contiguous 2-digit hex bytes.
+ * On failure, zero out the buffer and return -1.
+ */
+int
+http_io_parse_hex(const char *str, u_char *buf, u_int nbytes)
+{
+    int i;
+
+    /* Parse hex string */
+    for (i = 0; i < nbytes; i++) {
+        int byte;
+        int j;
+
+        for (byte = j = 0; j < 2; j++) {
+            const char ch = str[2 * i + j];
+
+            if (!isxdigit(ch)) {
+                memset(buf, 0, nbytes);
+                return -1;
+            }
+            byte <<= 4;
+            byte |= ch <= '9' ? ch - '0' : tolower(ch) - 'a' + 10;
+        }
+        buf[i] = byte;
+    }
+
+    /* Done */
+    return 0;
+}
+
+void
+http_io_openssl_locker(int mode, int i, const char *file, int line)
+{
+    if ((mode & CRYPTO_LOCK) != 0)
+        pthread_mutex_lock(&openssl_locks[i]);
+    else
+        pthread_mutex_unlock(&openssl_locks[i]);
+}
+
+u_long
+http_io_openssl_ider(void)
+{
+    return (u_long)pthread_self();
+}
+
+void
+http_io_base64_encode(char *buf, size_t bufsiz, const void *data, size_t len)
+{
+    BUF_MEM *bptr;
+    BIO* bmem;
+    BIO* b64;
+
+    b64 = BIO_new(BIO_f_base64());
+    bmem = BIO_new(BIO_s_mem());
+    b64 = BIO_push(b64, bmem);
+    BIO_write(b64, data, len);
+    (void)BIO_flush(b64);
+    BIO_get_mem_ptr(b64, &bptr);
+    snprintf(buf, bufsiz, "%.*s", (int)bptr->length - 1, (char *)bptr->data);
+    BIO_free_all(b64);
+}
+
+int
+http_io_is_zero_block(const void *data, u_int block_size)
+{
+    static const u_long zero;
+    const u_int *ptr;
+    int i;
+
+    if (block_size <= sizeof(zero))
+        return memcmp(data, &zero, block_size) == 0;
+    ptr = (const u_int *)data;
+    for (i = 0; i < block_size / sizeof(*ptr); i++) {
+        if (*ptr++ != 0)
+            return 0;
+    }
+    return 1;
 }

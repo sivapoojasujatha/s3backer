@@ -20,12 +20,12 @@
  * 02110-1301, USA.
  */
 
-#include "s3backer.h"
+#include "cloudbacker.h"
 #include "block_cache.h"
 #include "ec_protect.h"
 #include "fuse_ops.h"
 #include "s3b_http_io.h"
-#include "s3b_config.h"
+#include "cloudbacker_config.h"
 
 /* Definitions */
 #define NUM_THREADS     10
@@ -49,8 +49,8 @@ static uint64_t get_time(void);
 /* Internal variables */
 static void *zero_block;
 static pthread_mutex_t mutex;
-static struct s3b_config *config;
-static struct s3backer_store *store;
+static cloudbacker_config *config;
+static struct cloudbacker_store *store;
 static struct block_state *blocks;
 static uint64_t start_time;
 
@@ -62,14 +62,14 @@ main(int argc, char **argv)
     int r;
 
     /* Get configuration */
-    if ((config = s3backer_get_config(argc, argv)) == NULL)
+    if ((config = cloudbacker_get_config(argc, argv)) == NULL)
         exit(1);
     if (config->block_size < sizeof(u_int))
         err(1, "block size too small");
 
     /* Open store */
-    if ((store = s3backer_create_store(config)) == NULL)
-        err(1, "s3backer_create_store");
+    if ((store = cloudbacker_create_store(config)) == NULL)
+        err(1, "cloudbacker_create_store");
 
     /* Allocate block states */
     if ((blocks = calloc(config->num_blocks, sizeof(*blocks))) == NULL)
@@ -105,7 +105,7 @@ thread_main(void *arg)
 {
     const int id = (int)(intptr_t)arg;
     u_char data[config->block_size];
-    s3b_block_t block_num;
+    cb_block_t block_num;
     int millis;
     int r;
 

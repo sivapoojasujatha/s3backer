@@ -20,7 +20,7 @@
  * 02110-1301, USA.
  */
 
-#include "s3backer.h"
+#include "cloudbacker.h"
 #include "s3b_http_io.h"
 #include "block_part.h"
 #include "test_io.h"
@@ -34,65 +34,65 @@ struct test_io_private {
     u_char                      zero_block[0];
 };
 
-/* s3backer_store functions */
-static int test_io_meta_data(struct s3backer_store *s3b, off_t *file_sizep, u_int *block_sizep);
-static int test_io_set_mounted(struct s3backer_store *s3b, int *old_valuep, int new_value);
-static int test_io_read_block(struct s3backer_store *s3b, s3b_block_t block_num, void *dest,
+/* cloudbacker_store functions */
+static int test_io_meta_data(struct cloudbacker_store *backerstore, off_t *file_sizep, u_int *block_sizep);
+static int test_io_set_mounted(struct cloudbacker_store *backerstore, int *old_valuep, int new_value);
+static int test_io_read_block(struct cloudbacker_store *backerstore, cb_block_t block_num, void *dest,
   u_char *actual_md5, const u_char *expect_md5, int strict);
-static int test_io_write_block(struct s3backer_store *s3b, s3b_block_t block_num, const void *src, u_char *md5,
+static int test_io_write_block(struct cloudbacker_store *backerstore, cb_block_t block_num, const void *src, u_char *md5,
   check_cancel_t *check_cancel, void *check_cancel_arg);
-static int test_io_read_block_part(struct s3backer_store *s3b, s3b_block_t block_num, u_int off, u_int len, void *dest);
-static int test_io_write_block_part(struct s3backer_store *s3b, s3b_block_t block_num, u_int off, u_int len, const void *src);
-static int test_io_list_blocks(struct s3backer_store *s3b, block_list_func_t *callback, void *arg);
-static int test_io_flush(struct s3backer_store *s3b);
-static void test_io_destroy(struct s3backer_store *s3b);
+static int test_io_read_block_part(struct cloudbacker_store *backerstore, cb_block_t block_num, u_int off, u_int len, void *dest);
+static int test_io_write_block_part(struct cloudbacker_store *backerstore, cb_block_t block_num, u_int off, u_int len, const void *src);
+static int test_io_list_blocks(struct cloudbacker_store *backerstore, block_list_func_t *callback, void *arg);
+static int test_io_flush(struct cloudbacker_store *backerstore);
+static void test_io_destroy(struct cloudbacker_store *backerstore);
 
 /*
  * Constructor
  *
  * On error, returns NULL and sets `errno'.
  */
-struct s3backer_store *
+struct cloudbacker_store *
 test_io_create(struct http_io_conf *config)
 {
-    struct s3backer_store *s3b;
+    struct cloudbacker_store *backerstore;
     struct test_io_private *priv;
 
     /* Initialize structures */
-    if ((s3b = calloc(1, sizeof(*s3b))) == NULL)
+    if ((backerstore = calloc(1, sizeof(*backerstore))) == NULL)
         return NULL;
-    s3b->meta_data = test_io_meta_data;
-    s3b->set_mounted = test_io_set_mounted;
-    s3b->read_block = test_io_read_block;
-    s3b->write_block = test_io_write_block;
-    s3b->read_block_part = test_io_read_block_part;
-    s3b->write_block_part = test_io_write_block_part;
-    s3b->list_blocks = test_io_list_blocks;
-    s3b->flush = test_io_flush;
-    s3b->destroy = test_io_destroy;
+    backerstore->meta_data = test_io_meta_data;
+    backerstore->set_mounted = test_io_set_mounted;
+    backerstore->read_block = test_io_read_block;
+    backerstore->write_block = test_io_write_block;
+    backerstore->read_block_part = test_io_read_block_part;
+    backerstore->write_block_part = test_io_write_block_part;
+    backerstore->list_blocks = test_io_list_blocks;
+    backerstore->flush = test_io_flush;
+    backerstore->destroy = test_io_destroy;
     if ((priv = calloc(1, sizeof(*priv) + config->block_size)) == NULL) {
-        free(s3b);
+        free(backerstore);
         errno = ENOMEM;
         return NULL;
     }
     priv->config = config;
-    s3b->data = priv;
+    backerstore->data = priv;
 
     /* Random initialization */
     srandom((u_int)time(NULL));
 
     /* Done */
-    return s3b;
+    return backerstore;
 }
 
 static int
-test_io_meta_data(struct s3backer_store *s3b, off_t *file_sizep, u_int *block_sizep)
+test_io_meta_data(struct cloudbacker_store *backerstore, off_t *file_sizep, u_int *block_sizep)
 {
     return 0;
 }
 
 static int
-test_io_set_mounted(struct s3backer_store *s3b, int *old_valuep, int new_value)
+test_io_set_mounted(struct cloudbacker_store *backerstore, int *old_valuep, int new_value)
 {
     if (old_valuep != NULL)
         *old_valuep = 0;
@@ -100,13 +100,13 @@ test_io_set_mounted(struct s3backer_store *s3b, int *old_valuep, int new_value)
 }
 
 static int
-test_io_flush(struct s3backer_store *const s3b)
+test_io_flush(struct cloudbacker_store *const s3b)
 {
     return 0;
 }
 
 static void
-test_io_destroy(struct s3backer_store *const s3b)
+test_io_destroy(struct cloudbacker_store *const s3b)
 {
     struct test_io_private *const priv = s3b->data;
 
@@ -115,7 +115,7 @@ test_io_destroy(struct s3backer_store *const s3b)
 }
 
 static int
-test_io_read_block(struct s3backer_store *const s3b, s3b_block_t block_num, void *dest,
+test_io_read_block(struct cloudbacker_store *const s3b, cb_block_t block_num, void *dest,
   u_char *actual_md5, const u_char *expect_md5, int strict)
 {
     struct test_io_private *const priv = s3b->data;
@@ -218,7 +218,7 @@ test_io_read_block(struct s3backer_store *const s3b, s3b_block_t block_num, void
 }
 
 static int
-test_io_write_block(struct s3backer_store *const s3b, s3b_block_t block_num, const void *src, u_char *caller_md5,
+test_io_write_block(struct cloudbacker_store *const s3b, cb_block_t block_num, const void *src, u_char *caller_md5,
   check_cancel_t *check_cancel, void *check_cancel_arg)
 {
     struct test_io_private *const priv = s3b->data;
@@ -310,29 +310,29 @@ test_io_write_block(struct s3backer_store *const s3b, s3b_block_t block_num, con
 }
 
 static int
-test_io_read_block_part(struct s3backer_store *s3b, s3b_block_t block_num, u_int off, u_int len, void *dest)
+test_io_read_block_part(struct cloudbacker_store *backerstore, cb_block_t block_num, u_int off, u_int len, void *dest)
 {
-    struct test_io_private *const priv = s3b->data;
+    struct test_io_private *const priv = backerstore->data;
     struct http_io_conf *const config = priv->config;
 
-    return block_part_read_block_part(s3b, block_num, config->block_size, off, len, dest);
+    return block_part_read_block_part(backerstore, block_num, config->block_size, off, len, dest);
 }
 
 static int
-test_io_write_block_part(struct s3backer_store *s3b, s3b_block_t block_num, u_int off, u_int len, const void *src)
+test_io_write_block_part(struct cloudbacker_store *backerstore, cb_block_t block_num, u_int off, u_int len, const void *src)
 {
-    struct test_io_private *const priv = s3b->data;
+    struct test_io_private *const priv = backerstore->data;
     struct http_io_conf *const config = priv->config;
 
-    return block_part_write_block_part(s3b, block_num, config->block_size, off, len, src);
+    return block_part_write_block_part(backerstore, block_num, config->block_size, off, len, src);
 }
 
 static int
-test_io_list_blocks(struct s3backer_store *s3b, block_list_func_t *callback, void *arg)
+test_io_list_blocks(struct cloudbacker_store *backerstore, block_list_func_t *callback, void *arg)
 {
-    struct test_io_private *const priv = s3b->data;
+    struct test_io_private *const priv = backerstore->data;
     struct http_io_conf *const config = priv->config;
-    s3b_block_t block_num;
+    cb_block_t block_num;
     struct dirent *dent;
     DIR *dir;
     int i;

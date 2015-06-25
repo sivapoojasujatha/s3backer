@@ -25,21 +25,21 @@
  */
 
 /* Definitions */
-typedef int s3b_dcache_visit_t(void *arg, s3b_block_t dslot, s3b_block_t block_num, const u_char *md5);
+typedef int cb_dcache_visit_t(void *arg, cb_block_t dslot, cb_block_t block_num, const u_char *md5);
 
 /* Declarations */
-struct s3b_dcache;
+struct cb_dcache;
 
 /* dcache.c */
-extern int s3b_dcache_open(struct s3b_dcache **dcachep, log_func_t *log, const char *filename,
-  u_int block_size, u_int max_blocks, s3b_dcache_visit_t *visitor, void *arg);
-extern void s3b_dcache_close(struct s3b_dcache *dcache);
-extern u_int s3b_dcache_size(struct s3b_dcache *dcache);
-extern int s3b_dcache_alloc_block(struct s3b_dcache *priv, u_int *dslotp);
-extern int s3b_dcache_record_block(struct s3b_dcache *priv, u_int dslot, s3b_block_t block_num, const u_char *md5);
-extern int s3b_dcache_erase_block(struct s3b_dcache *priv, u_int dslot);
-extern int s3b_dcache_free_block(struct s3b_dcache *dcache, u_int dslot);
-extern int s3b_dcache_read_block(struct s3b_dcache *dcache, u_int dslot, void *dest, u_int off, u_int len);
-extern int s3b_dcache_write_block(struct s3b_dcache *dcache, u_int dslot, const void *src, u_int off, u_int len);
-extern int s3b_dcache_fsync(struct s3b_dcache *dcache);
+extern int cb_dcache_open(struct cb_dcache **dcachep, log_func_t *log, const char *filename,
+  u_int block_size, u_int max_blocks, cb_dcache_visit_t *visitor, void *arg);
+extern void cb_dcache_close(struct cb_dcache *dcache);
+extern u_int cb_dcache_size(struct cb_dcache *dcache);
+extern int cb_dcache_alloc_block(struct cb_dcache *priv, u_int *dslotp);
+extern int cb_dcache_record_block(struct cb_dcache *priv, u_int dslot, cb_block_t block_num, const u_char *md5);
+extern int cb_dcache_erase_block(struct cb_dcache *priv, u_int dslot);
+extern int cb_dcache_free_block(struct cb_dcache *dcache, u_int dslot);
+extern int cb_dcache_read_block(struct cb_dcache *dcache, u_int dslot, void *dest, u_int off, u_int len);
+extern int cb_dcache_write_block(struct cb_dcache *dcache, u_int dslot, const void *src, u_int off, u_int len);
+extern int cb_dcache_fsync(struct cb_dcache *dcache);
 

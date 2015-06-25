@@ -20,12 +20,12 @@
  * 02110-1301, USA.
  */
 
-#include "s3backer.h"
+#include "cloudbacker.h"
 #include "block_cache.h"
 #include "ec_protect.h"
 #include "fuse_ops.h"
 #include "s3b_http_io.h"
-#include "s3b_config.h"
+#include "cloudbacker_config.h"
 #include "erase.h"
 #include "reset.h"
 
@@ -33,22 +33,22 @@ int
 main(int argc, char **argv)
 {
     const struct fuse_operations *fuse_ops;
-    struct s3b_config *config;
+    struct cloudbacker_config *config;
 
     /* Get configuration */
-    if ((config = s3backer_get_config(argc, argv)) == NULL)
+    if ((config = cloudbacker_get_config(argc, argv)) == NULL)
         return 1;
 
     /* Handle `--erase' flag */
     if (config->erase) {
-        if (s3backer_erase(config) != 0)
+        if (cloudbacker_erase(config) != 0)
             return 1;
         return 0;
     }
 
     /* Handle `--reset' flag */
     if (config->reset) {
-        if (s3backer_reset(config) != 0)
+        if (cloudbacker_reset(config) != 0)
             return 1;
         return 0;
     }

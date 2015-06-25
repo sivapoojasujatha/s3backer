@@ -20,11 +20,11 @@
 # 02110-1301, USA.
 #
 
-bin_PROGRAMS=       s3backer
+bin_PROGRAMS=       cloudbacker
 
 noinst_PROGRAMS=    tester
 
-noinst_HEADERS=     s3backer.h \
+noinst_HEADERS=         cloudbacker.h \
 			block_cache.h \
 			block_part.h \
 			dcache.h \
@@ -35,19 +35,19 @@ noinst_HEADERS=     s3backer.h \
 			s3b_http_io.h \
 			reset.h \
 			test_io.h \
-			s3b_config.h \
+			cloudbacker_config.h \
 			auth_conf.h \
 			http_gio.h
 
-man_MANS=           s3backer.1
+man_MANS=           cloudbacker.1
 
 docdir=             $(datadir)/doc/packages/$(PACKAGE)
 
 doc_DATA=           CHANGES COPYING README INSTALL TODO
 
-EXTRA_DIST=         CHANGES s3backer.1 s3backer.spec
+EXTRA_DIST=         CHANGES cloudbacker.1 cloudbacker.spec
 
-s3backer_SOURCES=   main.c \
+cloudbacker_SOURCES=   main.c \
 		    block_cache.c \
 		    block_part.c \
 		    dcache.c \
@@ -57,7 +57,7 @@ s3backer_SOURCES=   main.c \
 		    hash.c \
 		    s3b_http_io.c \
 		    reset.c \
-		    s3b_config.c \
+		    cloudbacker_config.c \
 		    test_io.c \
 		    gitrev.c \
 		    http_gio.c
@@ -71,7 +71,7 @@ tester_SOURCES=     tester.c \
 		    hash.c \
 		    s3b_http_io.c \
 		    reset.c \
-		    s3b_config.c \
+		    cloudbacker_config.c \
 		    test_io.c \
 		    gitrev.c \
 		    http_gio.c
@@ -81,5 +81,5 @@ AM_CFLAGS=          $(FUSE_CFLAGS)
 SUBDIRS=            debian
 
 gitrev.c:
-			printf 'const char *const s3backer_version = "%s";\n' "`git describe`" > gitrev.c
+			printf 'const char *const cloudbacker_version = "%s";\n' "`git describe`" > gitrev.c
 

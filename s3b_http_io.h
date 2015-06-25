@@ -30,8 +30,8 @@
 #define AUTH_VERSION_AWS4   "aws4"
 
 /* s3b_http_io.c */
-extern struct s3backer_store *http_io_create(struct http_io_conf *config);
-extern void http_io_get_stats(struct s3backer_store *s3b, struct http_io_stats *stats);
-extern int http_io_parse_block(struct http_io_conf *config, const char *name, s3b_block_t *block_num);
+struct cloudbacker_store *s3b_http_io_create(struct http_io_conf *config);
+//void s3b_http_io_get_stats(struct cloudbacker_store *backerstore, struct http_io_stats *stats);
+//int s3b_http_io_parse_block(struct http_io_conf *config, const char *name, cb_block_t *block_num);
 
 #endif

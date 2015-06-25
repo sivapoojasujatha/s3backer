@@ -20,23 +20,23 @@
  * 02110-1301, USA.
  */
 
-#include "s3backer.h"
+#include "cloudbacker.h"
 #include "block_cache.h"
 #include "dcache.h"
 #include "hash.h"
 
 /*
  * This file implements a simple block cache that acts as a "layer" on top
- * of an underlying s3backer_store.
+ * of an underlying cloudbacker_store.
  *
  * Blocks in the cache are in one of these states:
  *
- *  CLEAN       Data is consistent with underlying s3backer_store
- *  CLEAN2      Data is belived consistent with underlying s3backer_store, but need to verify MD5
- *  DIRTY       Data is inconsistent with underlying s3backer_store (needs writing)
- *  READING     Data is being read from the underlying s3backer_store
- *  READING2    Data is being read/verified from the underlying s3backer_store
- *  WRITING     Data is being written to underlying s3backer_store
+ *  CLEAN       Data is consistent with underlying cloudbacker_store
+ *  CLEAN2      Data is belived consistent with underlying cloudbacker_store, but need to verify MD5
+ *  DIRTY       Data is inconsistent with underlying cloudbacker_store (needs writing)
+ *  READING     Data is being read from the underlying cloudbacker_store
+ *  READING2    Data is being read/verified from the underlying cloudbacker_store
+ *  WRITING     Data is being written to underlying cloudbacker_store
  *  WRITING2    Same as WRITING, but a subsequent write has stored new data
  *
  * Blocks in the CLEAN and CLEAN2 states are linked in a list in order from least recently
@@ -45,7 +45,7 @@
  *
  * Blocks in the DIRTY state are linked in a list in the order they should be written.
  * A pool of worker threads picks them off and writes them through to the underlying
- * s3backer_store; while being written they are in state WRITING, or WRITING2 if another
+ * cloudbacker_store; while being written they are in state WRITING, or WRITING2 if another
  * write to the same block happens during that time. If the write is unsuccessful, the
  * block goes back to DIRTY and to the head of the DIRTY list: the result is that failed
  * writes of DIRTY blocks will retry indefinitely. If the write is successful, the
@@ -102,7 +102,7 @@
  * In state CLEAN2 only, the MD5 to verify immediately follows the structure.
  */
 struct cache_entry {
-    s3b_block_t                     block_num;      // block number - MUST BE FIRST
+    cb_block_t                     block_num;      // block number - MUST BE FIRST
     u_int                           dirty:1;        // indicates state DIRTY or WRITING2
     u_int                           verify:1;       // data should be verified first
     uint32_t                        timeout:30;     // when to evict (CLEAN[2]) or write (DIRTY)
@@ -134,19 +134,19 @@ struct cache_entry {
 /* Private data */
 struct block_cache_private {
     struct block_cache_conf         *config;        // configuration
-    struct s3backer_store           *inner;         // underlying s3backer store
+    struct cloudbacker_store           *inner;         // underlying s3backer store
     struct block_cache_stats        stats;          // statistics
     TAILQ_HEAD(, cache_entry)       cleans;         // list of clean blocks (LRU order)
     TAILQ_HEAD(, cache_entry)       dirties;        // list of dirty blocks (write order)
-    struct s3b_hash                 *hashtable;     // hashtable of all cached blocks
-    struct s3b_dcache               *dcache;        // on-disk persistent cache
+    struct cb_hash                 *hashtable;     // hashtable of all cached blocks
+    struct cb_dcache               *dcache;        // on-disk persistent cache
     u_int                           num_cleans;     // length of the 'cleans' list
     u_int                           num_dirties;    // # blocks that are DIRTY, WRITING, or WRITING2
     u_int64_t                       start_time;     // when we started
     u_int32_t                       clean_timeout;  // timeout for clean entries in time units
     u_int32_t                       dirty_timeout;  // timeout for dirty entries in time units
     double                          max_dirty_ratio;// dirty ratio at which we write immediately
-    s3b_block_t                     seq_last;       // last block read in sequence by upper layer
+    cb_block_t                     seq_last;       // last block read in sequence by upper layer
     u_int                           seq_count;      // # of blocks read in sequence by upper layer
     u_int                           ra_count;       // # of blocks of read-ahead initiated
     u_int                           thread_id;      // next thread id
@@ -166,26 +166,26 @@ struct cbinfo {
     void                        *arg;
 };
 
-/* s3backer_store functions */
-static int block_cache_meta_data(struct s3backer_store *s3b, off_t *file_sizep, u_int *block_sizep);
-static int block_cache_set_mounted(struct s3backer_store *s3b, int *old_valuep, int new_value);
-static int block_cache_read_block(struct s3backer_store *s3b, s3b_block_t block_num, void *dest,
+/* cloudbacker_store functions */
+static int block_cache_meta_data(struct cloudbacker_store *backerstore, off_t *file_sizep, u_int *block_sizep);
+static int block_cache_set_mounted(struct cloudbacker_store *backerstore, int *old_valuep, int new_value);
+static int block_cache_read_block(struct cloudbacker_store *backerstore, cb_block_t block_num, void *dest,
   u_char *actual_md5, const u_char *expect_md5, int strict);
-static int block_cache_write_block(struct s3backer_store *s3b, s3b_block_t block_num, const void *src, u_char *md5,
+static int block_cache_write_block(struct cloudbacker_store *backerstore, cb_block_t block_num, const void *src, u_char *md5,
   check_cancel_t *check_cancel, void *check_cancel_arg);
-static int block_cache_read_block_part(struct s3backer_store *s3b, s3b_block_t block_num, u_int off, u_int len, void *dest);
-static int block_cache_write_block_part(struct s3backer_store *s3b, s3b_block_t block_num, u_int off, u_int len, const void *src);
-static int block_cache_list_blocks(struct s3backer_store *s3b, block_list_func_t *callback, void *arg);
-static int block_cache_flush(struct s3backer_store *s3b);
-static void block_cache_destroy(struct s3backer_store *s3b);
+static int block_cache_read_block_part(struct cloudbacker_store *backerstore, cb_block_t block_num, u_int off, u_int len, void *dest);
+static int block_cache_write_block_part(struct cloudbacker_store *backerstore, cb_block_t block_num, u_int off, u_int len, const void *src);
+static int block_cache_list_blocks(struct cloudbacker_store *backerstore, block_list_func_t *callback, void *arg);
+static int block_cache_flush(struct cloudbacker_store *backerstore);
+static void block_cache_destroy(struct cloudbacker_store *backerstore);
 
 /* Other functions */
-static s3b_dcache_visit_t block_cache_dcache_load;
-static int block_cache_read(struct block_cache_private *priv, s3b_block_t block_num, u_int off, u_int len, void *dest);
-static int block_cache_do_read(struct block_cache_private *priv, s3b_block_t block_num, u_int off, u_int len, void *dest, int stats);
-static int block_cache_write(struct block_cache_private *priv, s3b_block_t block_num, u_int off, u_int len, const void *src);
+static cb_dcache_visit_t block_cache_dcache_load;
+static int block_cache_read(struct block_cache_private *priv, cb_block_t block_num, u_int off, u_int len, void *dest);
+static int block_cache_do_read(struct block_cache_private *priv, cb_block_t block_num, u_int off, u_int len, void *dest, int stats);
+static int block_cache_write(struct block_cache_private *priv, cb_block_t block_num, u_int off, u_int len, const void *src);
 static void *block_cache_worker_main(void *arg);
-static int block_cache_check_cancel(void *arg, s3b_block_t block_num);
+static int block_cache_check_cancel(void *arg, cb_block_t block_num);
 static int block_cache_get_entry(struct block_cache_private *priv, struct cache_entry **entryp, void **datap);
 static void block_cache_free_entry(struct block_cache_private *priv, struct cache_entry **entryp);
 static void block_cache_free_one(void *arg, void *value);
@@ -214,30 +214,30 @@ static void block_cache_check_one(void *arg, void *value);
  *
  * Returns NULL and sets errno on failure.
  */
-struct s3backer_store *
-block_cache_create(struct block_cache_conf *config, struct s3backer_store *inner)
+struct cloudbacker_store *
+block_cache_create(struct block_cache_conf *config, struct cloudbacker_store *inner)
 {
-    struct s3backer_store *s3b;
+    struct cloudbacker_store *backerstore;
     struct block_cache_private *priv;
     struct cache_entry *entry;
     pthread_t thread;
     int r;
 
-    /* Initialize s3backer_store structure */
-    if ((s3b = calloc(1, sizeof(*s3b))) == NULL) {
+    /* Initialize cloudbacker_store structure */
+    if ((backerstore = calloc(1, sizeof(*backerstore))) == NULL) {
         r = errno;
         (*config->log)(LOG_ERR, "calloc(): %s", strerror(r));
         goto fail0;
     }
-    s3b->meta_data = block_cache_meta_data;
-    s3b->set_mounted = block_cache_set_mounted;
-    s3b->read_block = block_cache_read_block;
-    s3b->write_block = block_cache_write_block;
-    s3b->read_block_part = block_cache_read_block_part;
-    s3b->write_block_part = block_cache_write_block_part;
-    s3b->list_blocks = block_cache_list_blocks;
-    s3b->flush = block_cache_flush;
-    s3b->destroy = block_cache_destroy;
+    backerstore->meta_data = block_cache_meta_data;
+    backerstore->set_mounted = block_cache_set_mounted;
+    backerstore->read_block = block_cache_read_block;
+    backerstore->write_block = block_cache_write_block;
+    backerstore->read_block_part = block_cache_read_block_part;
+    backerstore->write_block_part = block_cache_write_block_part;
+    backerstore->list_blocks = block_cache_list_blocks;
+    backerstore->flush = block_cache_flush;
+    backerstore->destroy = block_cache_destroy;
 
     /* Initialize block_cache_private structure */
     if ((priv = calloc(1, sizeof(*priv))) == NULL) {
@@ -264,9 +264,9 @@ block_cache_create(struct block_cache_conf *config, struct s3backer_store *inner
         goto fail7;
     TAILQ_INIT(&priv->cleans);
     TAILQ_INIT(&priv->dirties);
-    if ((r = s3b_hash_create(&priv->hashtable, config->cache_size)) != 0)
+    if ((r = cb_hash_create(&priv->hashtable, config->cache_size)) != 0)
         goto fail8;
-    s3b->data = priv;
+    backerstore->data = priv;
 
     /* Compute dirty ratio at which we will be writing immediately */
     priv->max_dirty_ratio = (double)(config->max_dirty != 0 ? config->max_dirty : config->cache_size) / (double)config->cache_size;
@@ -275,7 +275,7 @@ block_cache_create(struct block_cache_conf *config, struct s3backer_store *inner
 
     /* Initialize on-disk cache and read in directory */
     if (config->cache_file != NULL) {
-        if ((r = s3b_dcache_open(&priv->dcache, config->log, config->cache_file, config->block_size,
+        if ((r = cb_dcache_open(&priv->dcache, config->log, config->cache_file, config->block_size,
           config->cache_size, block_cache_dcache_load, priv)) != 0)
             goto fail9;
         priv->stats.initial_size = priv->num_cleans;
@@ -293,7 +293,7 @@ block_cache_create(struct block_cache_conf *config, struct s3backer_store *inner
 
     /* Done */
     pthread_mutex_unlock(&priv->mutex);
-    return s3b;
+    return backerstore;
 
 fail10:
     priv->stopping = 1;
@@ -306,10 +306,10 @@ fail10:
             TAILQ_REMOVE(&priv->cleans, entry, link);
             free(entry);
         }
-        s3b_dcache_close(priv->dcache);
+        cb_dcache_close(priv->dcache);
     }
 fail9:
-    s3b_hash_destroy(priv->hashtable);
+    cb_hash_destroy(priv->hashtable);
 fail8:
     pthread_cond_destroy(&priv->write_complete);
 fail7:
@@ -325,7 +325,7 @@ fail3:
 fail2:
     free(priv);
 fail1:
-    free(s3b);
+    free(backerstore);
 fail0:
     (*config->log)(LOG_ERR, "block_cache creation failed: %s", strerror(r));
     errno = r;
@@ -336,7 +336,7 @@ fail0:
  * Callback function to pre-load the cache from a pre-existing cache file.
  */
 static int
-block_cache_dcache_load(void *arg, s3b_block_t dslot, s3b_block_t block_num, const u_char *md5)
+block_cache_dcache_load(void *arg, cb_block_t dslot, cb_block_t block_num, const u_char *md5)
 {
     struct block_cache_private *const priv = arg;
     struct block_cache_conf *const config = priv->config;
@@ -347,7 +347,7 @@ block_cache_dcache_load(void *arg, s3b_block_t dslot, s3b_block_t block_num, con
     assert(config->cache_file != NULL);
 
     /* Sanity check a block is not listed twice */
-    if ((entry = s3b_hash_get(priv->hashtable, block_num)) != NULL) {
+    if ((entry = cb_hash_get(priv->hashtable, block_num)) != NULL) {
         (*config->log)(LOG_ERR, "corrupted cache file: block 0x%0*jx listed twice (in dslots %ju and %ju)",
           S3B_BLOCK_NUM_DIGITS, (uintmax_t)block_num, (uintmax_t)entry->u.dslot, (uintmax_t)dslot);
         return EINVAL;
@@ -369,31 +369,31 @@ block_cache_dcache_load(void *arg, s3b_block_t dslot, s3b_block_t block_num, con
     entry->u.dslot = dslot;
     TAILQ_INSERT_TAIL(&priv->cleans, entry, link);
     priv->num_cleans++;
-    s3b_hash_put_new(priv->hashtable, entry);
+    cb_hash_put_new(priv->hashtable, entry);
     assert(ENTRY_GET_STATE(entry) == (config->no_verify ? CLEAN : CLEAN2));
     return 0;
 }
 
 static int
-block_cache_meta_data(struct s3backer_store *s3b, off_t *file_sizep, u_int *block_sizep)
+block_cache_meta_data(struct cloudbacker_store *backerstore, off_t *file_sizep, u_int *block_sizep)
 {
-    struct block_cache_private *const priv = s3b->data;
+    struct block_cache_private *const priv = backerstore->data;
 
     return (*priv->inner->meta_data)(priv->inner, file_sizep, block_sizep);
 }
 
 static int
-block_cache_set_mounted(struct s3backer_store *s3b, int *old_valuep, int new_value)
+block_cache_set_mounted(struct cloudbacker_store *backerstore, int *old_valuep, int new_value)
 {
-    struct block_cache_private *const priv = s3b->data;
+    struct block_cache_private *const priv = backerstore->data;
 
     return (*priv->inner->set_mounted)(priv->inner, old_valuep, new_value);
 }
 
 static int
-block_cache_flush(struct s3backer_store *const s3b)
+block_cache_flush(struct cloudbacker_store *const backerstore)
 {
-    struct block_cache_private *const priv = s3b->data;
+    struct block_cache_private *const priv = backerstore->data;
 
     /* Grab lock and sanity check */
     pthread_mutex_lock(&priv->mutex);
@@ -412,9 +412,9 @@ block_cache_flush(struct s3backer_store *const s3b)
 }
 
 static void
-block_cache_destroy(struct s3backer_store *const s3b)
+block_cache_destroy(struct cloudbacker_store *const backerstore)
 {
-    struct block_cache_private *const priv = s3b->data;
+    struct block_cache_private *const priv = backerstore->data;
     struct block_cache_conf *const config = priv->config;
 
     /* Grab lock and sanity check */
@@ -433,9 +433,9 @@ block_cache_destroy(struct s3backer_store *const s3b)
 
     /* Free structures */
     if (config->cache_file != NULL)
-        s3b_dcache_close(priv->dcache);
-    s3b_hash_foreach(priv->hashtable, block_cache_free_one, priv);
-    s3b_hash_destroy(priv->hashtable);
+        cb_dcache_close(priv->dcache);
+    cb_hash_foreach(priv->hashtable, block_cache_free_one, priv);
+    cb_hash_destroy(priv->hashtable);
     pthread_cond_destroy(&priv->write_complete);
     pthread_cond_destroy(&priv->worker_exit);
     pthread_cond_destroy(&priv->worker_work);
@@ -443,25 +443,25 @@ block_cache_destroy(struct s3backer_store *const s3b)
     pthread_cond_destroy(&priv->space_avail);
     pthread_mutex_destroy(&priv->mutex);
     free(priv);
-    free(s3b);
+    free(backerstore);
 }
 
 void
-block_cache_get_stats(struct s3backer_store *s3b, struct block_cache_stats *stats)
+block_cache_get_stats(struct cloudbacker_store *backerstore, struct block_cache_stats *stats)
 {
-    struct block_cache_private *const priv = s3b->data;
+    struct block_cache_private *const priv = backerstore->data;
 
     pthread_mutex_lock(&priv->mutex);
     memcpy(stats, &priv->stats, sizeof(*stats));
-    stats->current_size = s3b_hash_size(priv->hashtable);
+    stats->current_size = cb_hash_size(priv->hashtable);
     stats->dirty_ratio = block_cache_dirty_ratio(priv);
     pthread_mutex_unlock(&priv->mutex);
 }
 
 static int
-block_cache_list_blocks(struct s3backer_store *s3b, block_list_func_t *callback, void *arg)
+block_cache_list_blocks(struct cloudbacker_store *backerstore, block_list_func_t *callback, void *arg)
 {
-    struct block_cache_private *const priv = s3b->data;
+    struct block_cache_private *const priv = backerstore->data;
     struct cbinfo cbinfo;
     int r;
 
@@ -470,16 +470,16 @@ block_cache_list_blocks(struct s3backer_store *s3b, block_list_func_t *callback,
     cbinfo.callback = callback;
     cbinfo.arg = arg;
     pthread_mutex_lock(&priv->mutex);
-    s3b_hash_foreach(priv->hashtable, block_cache_dirty_callback, &cbinfo);
+    cb_hash_foreach(priv->hashtable, block_cache_dirty_callback, &cbinfo);
     pthread_mutex_unlock(&priv->mutex);
     return 0;
 }
 
 static int
-block_cache_read_block(struct s3backer_store *const s3b, s3b_block_t block_num, void *dest,
+block_cache_read_block(struct cloudbacker_store *const backerstore, cb_block_t block_num, void *dest,
   u_char *actual_md5, const u_char *expect_md5, int strict)
 {
-    struct block_cache_private *const priv = s3b->data;
+    struct block_cache_private *const priv = backerstore->data;
     struct block_cache_conf *const config = priv->config;
 
     assert(expect_md5 == NULL);
@@ -488,9 +488,9 @@ block_cache_read_block(struct s3backer_store *const s3b, s3b_block_t block_num, 
 }
 
 static int
-block_cache_read_block_part(struct s3backer_store *s3b, s3b_block_t block_num, u_int off, u_int len, void *dest)
+block_cache_read_block_part(struct cloudbacker_store *backerstore, cb_block_t block_num, u_int off, u_int len, void *dest)
 {
-    struct block_cache_private *const priv = s3b->data;
+    struct block_cache_private *const priv = backerstore->data;
 
     return block_cache_read(priv, block_num, off, len, dest);
 }
@@ -499,7 +499,7 @@ block_cache_read_block_part(struct s3backer_store *s3b, s3b_block_t block_num, u
  * Read a block, and trigger read-ahead if necessary.
  */
 static int
-block_cache_read(struct block_cache_private *const priv, s3b_block_t block_num, u_int off, u_int len, void *dest)
+block_cache_read(struct block_cache_private *const priv, cb_block_t block_num, u_int off, u_int len, void *dest)
 {
     struct block_cache_conf *const config = priv->config;
     int r = 0;
@@ -537,7 +537,7 @@ block_cache_read(struct block_cache_private *const priv, s3b_block_t block_num, 
  * Assumes the mutex is held.
  */
 static int
-block_cache_do_read(struct block_cache_private *const priv, s3b_block_t block_num, u_int off, u_int len, void *dest, int stats)
+block_cache_do_read(struct block_cache_private *const priv, cb_block_t block_num, u_int off, u_int len, void *dest, int stats)
 {
     struct block_cache_conf *const config = priv->config;
     struct cache_entry *entry;
@@ -553,7 +553,7 @@ block_cache_do_read(struct block_cache_private *const priv, s3b_block_t block_nu
 
 again:
     /* Check to see if a cache entry already exists */
-    if ((entry = s3b_hash_get(priv->hashtable, block_num)) != NULL) {
+    if ((entry = cb_hash_get(priv->hashtable, block_num)) != NULL) {
         assert(entry->block_num == block_num);
         switch (ENTRY_GET_STATE(entry)) {
         case READING:       /* Wait for other thread already reading this block to finish */
@@ -574,7 +574,7 @@ again:
 
             /* Change from CLEAN2 to READING2 */
             if (config->cache_file != NULL) {
-                if ((r = s3b_dcache_erase_block(priv->dcache, entry->u.dslot)) != 0)
+                if ((r = cb_dcache_erase_block(priv->dcache, entry->u.dslot)) != 0)
                     (*config->log)(LOG_ERR, "can't erase cached block! %s", strerror(r));
             }
             TAILQ_REMOVE(&priv->cleans, entry, link);
@@ -618,7 +618,7 @@ again:
     entry->verify = 0;
     entry->timeout = READING_TIMEOUT;
     ENTRY_RESET_LINK(entry);
-    s3b_hash_put_new(priv->hashtable, entry);
+    cb_hash_put_new(priv->hashtable, entry);
     assert(ENTRY_GET_STATE(entry) == READING);
 
     /* Update stats */
@@ -626,7 +626,7 @@ again:
         priv->stats.read_misses++;
 
 read:
-    /* Read the block from the underlying s3backer_store */
+    /* Read the block from the underlying cloudbacker_store */
     assert(ENTRY_GET_STATE(entry) == READING || ENTRY_GET_STATE(entry) == READING2);
     pthread_mutex_unlock(&priv->mutex);
     r = (*priv->inner->read_block)(priv->inner, block_num, data, md5, entry->verify ? entry->md5 : NULL, 0);
@@ -634,7 +634,7 @@ read:
     S3BCACHE_CHECK_INVARIANTS(priv);
 
     /* The entry should still exist and be in state READING[2] */
-    assert(s3b_hash_get(priv->hashtable, block_num) == entry);
+    assert(cb_hash_get(priv->hashtable, block_num) == entry);
     assert(ENTRY_GET_STATE(entry) == READING || ENTRY_GET_STATE(entry) == READING2);
     assert(config->cache_file != NULL || entry->u.data == data);
 
@@ -646,7 +646,7 @@ read:
     pthread_cond_broadcast(&priv->end_reading);
     pthread_cond_signal(&priv->space_avail);
 
-    /* Check for unexpected error from underlying s3backer_store */
+    /* Check for unexpected error from underlying cloudbacker_store */
     if (r != 0 && !(entry->verify && r == EEXIST))
         goto fail;
 
@@ -673,7 +673,7 @@ read:
     /* Copy data into the disk cache and free temporary buffer (if necessary) */
     if (config->cache_file != NULL) {
         if (!verified_but_not_read) {
-            if ((r = s3b_dcache_write_block(priv->dcache, entry->u.dslot, data, 0, config->block_size)) != 0)
+            if ((r = cb_dcache_write_block(priv->dcache, entry->u.dslot, data, 0, config->block_size)) != 0)
                 goto fail;
         }
         free(data);
@@ -683,7 +683,7 @@ read:
     assert(ENTRY_GET_STATE(entry) == READING);
     assert(!entry->verify);
     if (config->cache_file != NULL) {
-        if ((r = s3b_dcache_record_block(priv->dcache, entry->u.dslot, entry->block_num, md5)) != 0)
+        if ((r = cb_dcache_record_block(priv->dcache, entry->u.dslot, entry->block_num, md5)) != 0)
             (*config->log)(LOG_ERR, "can't record cached block! %s", strerror(r));
     }
     entry->timeout = block_cache_get_time(priv) + priv->clean_timeout;
@@ -702,18 +702,18 @@ fail:
     assert(r != 0);
     assert(ENTRY_GET_STATE(entry) == READING || ENTRY_GET_STATE(entry) == READING2);
     if (config->cache_file != NULL)
-        s3b_dcache_free_block(priv->dcache, entry->u.dslot);
-    s3b_hash_remove(priv->hashtable, entry->block_num);
+        cb_dcache_free_block(priv->dcache, entry->u.dslot);
+    cb_hash_remove(priv->hashtable, entry->block_num);
     free(data);
     free(entry);
     return r;
 }
 
 static int
-block_cache_write_block(struct s3backer_store *const s3b, s3b_block_t block_num, const void *src, u_char *md5,
+block_cache_write_block(struct cloudbacker_store *const backerstore, cb_block_t block_num, const void *src, u_char *md5,
   check_cancel_t *check_cancel, void *check_cancel_arg)
 {
-    struct block_cache_private *const priv = s3b->data;
+    struct block_cache_private *const priv = backerstore->data;
     struct block_cache_conf *const config = priv->config;
 
     assert(md5 == NULL);
@@ -721,9 +721,9 @@ block_cache_write_block(struct s3backer_store *const s3b, s3b_block_t block_num,
 }
 
 static int
-block_cache_write_block_part(struct s3backer_store *s3b, s3b_block_t block_num, u_int off, u_int len, const void *src)
+block_cache_write_block_part(struct cloudbacker_store *backerstore, cb_block_t block_num, u_int off, u_int len, const void *src)
 {
-    struct block_cache_private *const priv = s3b->data;
+    struct block_cache_private *const priv = backerstore->data;
 
     return block_cache_write(priv, block_num, off, len, src);
 }
@@ -732,7 +732,7 @@ block_cache_write_block_part(struct s3backer_store *s3b, s3b_block_t block_num, 
  * Write a block or a portion thereof.
  */
 static int
-block_cache_write(struct block_cache_private *const priv, s3b_block_t block_num, u_int off, u_int len, const void *src)
+block_cache_write(struct block_cache_private *const priv, cb_block_t block_num, u_int off, u_int len, const void *src)
 {
     struct block_cache_conf *const config = priv->config;
     struct cache_entry *entry;
@@ -751,7 +751,7 @@ again:
     S3BCACHE_CHECK_INVARIANTS(priv);
 
     /* Find cache entry */
-    if ((entry = s3b_hash_get(priv->hashtable, block_num)) != NULL) {
+    if ((entry = cb_hash_get(priv->hashtable, block_num)) != NULL) {
         assert(entry->block_num == block_num);
         switch (ENTRY_GET_STATE(entry)) {
         case READING:               /* wait for entry to leave READING */
@@ -772,7 +772,7 @@ again:
 
             /* Invalidate disk cache entry */
             if (config->cache_file != NULL) {
-                if ((r = s3b_dcache_erase_block(priv->dcache, entry->u.dslot)) != 0)
+                if ((r = cb_dcache_erase_block(priv->dcache, entry->u.dslot)) != 0)
                     (*config->log)(LOG_ERR, "can't erase cached block! %s", strerror(r));
             }
 
@@ -836,7 +836,7 @@ again:
     entry->timeout = block_cache_get_time(priv) + priv->dirty_timeout;
     entry->dirty = 1;
     assert(off == 0 && len == config->block_size);
-    s3b_hash_put_new(priv->hashtable, entry);
+    cb_hash_put_new(priv->hashtable, entry);
     TAILQ_INSERT_TAIL(&priv->dirties, entry, link);
     priv->num_dirties++;
     assert(ENTRY_GET_STATE(entry) == DIRTY);
@@ -857,7 +857,7 @@ success:
             S3BCACHE_CHECK_INVARIANTS(priv);
 
             /* Find cache entry */
-            if ((entry = s3b_hash_get(priv->hashtable, block_num)) == NULL)
+            if ((entry = cb_hash_get(priv->hashtable, block_num)) == NULL)
                 break;
 
             /* See if it is now clean */
@@ -905,7 +905,7 @@ again:
      *
      * If the cache is full, try to evict a clean entry.
      */
-    if (s3b_hash_size(priv->hashtable) < config->cache_size) {
+    if (cb_hash_size(priv->hashtable) < config->cache_size) {
         if ((entry = calloc(1, sizeof(*entry))) == NULL) {
             r = errno;
             (*config->log)(LOG_ERR, "can't allocate block cache entry: %s", strerror(r));
@@ -932,7 +932,7 @@ again:
     /* Get permanent data buffer */
     if (config->cache_file == NULL)
         entry->u.data = data;
-    else if ((r = s3b_dcache_alloc_block(priv->dcache, &entry->u.dslot)) != 0) {    /* should not happen */
+    else if ((r = cb_dcache_alloc_block(priv->dcache, &entry->u.dslot)) != 0) {    /* should not happen */
         (*config->log)(LOG_ERR, "can't alloc cached block! %s", strerror(r));
         free(data);             /* OK if NULL */
         data = NULL;
@@ -967,16 +967,16 @@ block_cache_free_entry(struct block_cache_private *priv, struct cache_entry **en
 
     /* Free the data */
     if (config->cache_file != NULL) {
-        if ((r = s3b_dcache_erase_block(priv->dcache, entry->u.dslot)) != 0)
+        if ((r = cb_dcache_erase_block(priv->dcache, entry->u.dslot)) != 0)
             (*config->log)(LOG_ERR, "can't erase cached block! %s", strerror(r));
-        if ((r = s3b_dcache_free_block(priv->dcache, entry->u.dslot)) != 0)
+        if ((r = cb_dcache_free_block(priv->dcache, entry->u.dslot)) != 0)
             (*config->log)(LOG_ERR, "can't free cached block! %s", strerror(r));
     } else
         free(entry->u.data);
 
     /* Remove entry from the clean list */
     TAILQ_REMOVE(&priv->cleans, entry, link);
-    s3b_hash_remove(priv->hashtable, entry->block_num);
+    cb_hash_remove(priv->hashtable, entry->block_num);
     priv->num_cleans--;
 
     /* Free the entry */
@@ -1076,7 +1076,7 @@ block_cache_worker_main(void *arg)
             /* If block was not modified while being written (WRITING), it is now CLEAN */
             if (!entry->dirty) {
                 if (config->cache_file != NULL) {
-                    if ((r = s3b_dcache_record_block(priv->dcache, entry->u.dslot, entry->block_num, md5)) != 0)
+                    if ((r = cb_dcache_record_block(priv->dcache, entry->u.dslot, entry->block_num, md5)) != 0)
                         (*config->log)(LOG_ERR, "can't record cached block! %s", strerror(r));
                 }
                 priv->num_dirties--;
@@ -1103,13 +1103,13 @@ block_cache_worker_main(void *arg)
         /* See if there is a read-ahead block that needs to be read */
         if (priv->seq_count >= config->read_ahead_trigger && priv->ra_count < config->read_ahead) {
             while (priv->ra_count < config->read_ahead) {
-                s3b_block_t ra_block;
+                cb_block_t ra_block;
 
                 /* We will handle read-ahead for the next read-ahead block; claim it now */
                 ra_block = priv->seq_last + ++priv->ra_count;
 
                 /* If block already exists in the cache, nothing needs to be done */
-                if (s3b_hash_get(priv->hashtable, ra_block) != NULL)
+                if (cb_hash_get(priv->hashtable, ra_block) != NULL)
                     continue;
 
                 /* Perform a speculative read of the block so it will get stored in the cache */
@@ -1140,7 +1140,7 @@ done:
  * See if we want to cancel the current write for the given block.
  */
 static int
-block_cache_check_cancel(void *arg, s3b_block_t block_num)
+block_cache_check_cancel(void *arg, cb_block_t block_num)
 {
     struct block_cache_private *const priv = arg;
     struct cache_entry *entry;
@@ -1151,7 +1151,7 @@ block_cache_check_cancel(void *arg, s3b_block_t block_num)
     S3BCACHE_CHECK_INVARIANTS(priv);
 
     /* Find cache entry */
-    entry = s3b_hash_get(priv->hashtable, block_num);
+    entry = cb_hash_get(priv->hashtable, block_num);
 
     /* Sanity check */
     assert(entry != NULL);
@@ -1241,7 +1241,7 @@ block_cache_verified(struct block_cache_private *priv, struct cache_entry *entry
         goto done;
 
     /* Update all references that point to the entry */
-    s3b_hash_put(priv->hashtable, new_entry);
+    cb_hash_put(priv->hashtable, new_entry);
     if (ENTRY_IN_LIST(entry)) {
         TAILQ_REMOVE(&priv->cleans, entry, link);
         TAILQ_INSERT_TAIL(&priv->cleans, new_entry, link);
@@ -1274,7 +1274,7 @@ block_cache_read_data(struct block_cache_private *priv, struct cache_entry *entr
     }
 
     /* Handle on-disk case */
-    return s3b_dcache_read_block(priv->dcache, entry->u.dslot, dest, off, len);
+    return cb_dcache_read_block(priv->dcache, entry->u.dslot, dest, off, len);
 }
 
 /*
@@ -1300,7 +1300,7 @@ block_cache_write_data(struct block_cache_private *priv, struct cache_entry *ent
     }
 
     /* Handle on-disk case */
-    return s3b_dcache_write_block(priv->dcache, entry->u.dslot, src, off, len);
+    return cb_dcache_write_block(priv->dcache, entry->u.dslot, src, off, len);
 }
 
 /*
@@ -1361,7 +1361,7 @@ block_cache_check_invariants(struct block_cache_private *priv)
     /* Check CLEANs and CLEAN2s */
     for (entry = TAILQ_FIRST(&priv->cleans); entry != NULL; entry = TAILQ_NEXT(entry, link)) {
         assert(ENTRY_GET_STATE(entry) == CLEAN || ENTRY_GET_STATE(entry) == CLEAN2);
-        assert(s3b_hash_get(priv->hashtable, entry->block_num) == entry);
+        assert(cb_hash_get(priv->hashtable, entry->block_num) == entry);
         clean_len++;
     }
     assert(clean_len == priv->num_cleans);
@@ -1369,22 +1369,22 @@ block_cache_check_invariants(struct block_cache_private *priv)
     /* Check DIRTYs */
     for (entry = TAILQ_FIRST(&priv->dirties); entry != NULL; entry = TAILQ_NEXT(entry, link)) {
         assert(ENTRY_GET_STATE(entry) == DIRTY);
-        assert(s3b_hash_get(priv->hashtable, entry->block_num) == entry);
+        assert(cb_hash_get(priv->hashtable, entry->block_num) == entry);
         dirty_len++;
     }
 
     /* Check hash table size */
-    assert(s3b_hash_size(priv->hashtable) <= config->cache_size);
+    assert(cb_hash_size(priv->hashtable) <= config->cache_size);
 
     /* Check hash table entries */
     memset(&info, 0, sizeof(info));
-    s3b_hash_foreach(priv->hashtable, block_cache_check_one, &info);
+    cb_hash_foreach(priv->hashtable, block_cache_check_one, &info);
 
     /* Check agreement */
     assert(info.num_clean == clean_len);
     assert(info.num_dirty == dirty_len);
     assert(info.num_clean + info.num_dirty + info.num_reading + info.num_writing + info.num_writing2
-      == s3b_hash_size(priv->hashtable));
+      == cb_hash_size(priv->hashtable));
     assert(priv->num_dirties == info.num_dirty + info.num_writing + info.num_writing2);
 
     /* Check read-ahead */

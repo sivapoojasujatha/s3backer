@@ -21,5 +21,5 @@
  */
 
 /* test_io.c */
-extern struct s3backer_store *test_io_create(struct http_io_conf *config);
+extern struct cloudbacker_store *test_io_create(struct http_io_conf *config);
 

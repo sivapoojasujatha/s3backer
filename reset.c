@@ -20,19 +20,19 @@
  * 02110-1301, USA.
  */
 
-#include "s3backer.h"
+#include "cloudbacker.h"
 #include "block_cache.h"
 #include "ec_protect.h"
 #include "fuse_ops.h"
 #include "s3b_http_io.h"
 #include "test_io.h"
-#include "s3b_config.h"
+#include "cloudbacker_config.h"
 #include "reset.h"
 
 int
-s3backer_reset(struct s3b_config *config)
+cloudbacker_reset(cloudbacker_config *config)
 {
-    struct s3backer_store *s3b = NULL;
+    struct cloudbacker_store *backerstore = NULL;
     int ok = 0;
     int r;
 
@@ -41,13 +41,13 @@ s3backer_reset(struct s3b_config *config)
         warnx("resetting mounted flag for %s", config->description);
 
     /* Create temporary lower layer */
-    if ((s3b = config->test ? test_io_create(&config->http_io) : http_io_create(&config->http_io)) == NULL) {
+    if ((backerstore = config->test ? test_io_create(&config->http_io) : http_io_create(&config->http_io)) == NULL) {
         warnx(config->test ? "test_io_create" : "http_io_create");
         goto fail;
     }
 
     /* Clear mounted flag */
-    if ((r = (*s3b->set_mounted)(s3b, NULL, 0)) != 0) {
+    if ((r = (*backerstore->set_mounted)(backerstore, NULL, 0)) != 0) {
         warnx("error clearing mounted flag: %s", strerror(r));
         goto fail;
     }
@@ -59,8 +59,8 @@ s3backer_reset(struct s3b_config *config)
 
 fail:
     /* Clean up */
-    if (s3b != NULL)
-        (*s3b->destroy)(s3b);
+    if (backerstore != NULL)
+        (*backerstore->destroy)(backerstore);
     return ok ? 0 : -1;
 }
 

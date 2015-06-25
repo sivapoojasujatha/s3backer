@@ -21,5 +21,5 @@
  */
 
 /* reset.c */
-extern int s3backer_reset(struct s3b_config *config);
+extern int cloudbacker_reset(struct cloudbacker_config *config);
 

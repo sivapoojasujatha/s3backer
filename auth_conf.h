@@ -36,7 +36,10 @@ struct auth_conf {
 	    const char          *authVersion;
 	} s3;
 	struct {
-	    int unused;
+                //int unused;
+		char		*clientId; 
+		char		*p12_keyfile_path;
+		char		*auth_token;
 	} gs;
     } u;
 };
