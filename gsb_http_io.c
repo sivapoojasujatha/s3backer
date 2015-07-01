@@ -58,7 +58,7 @@
 #define JWT_AUTH_DEFAULT_PASSWORD       "notasecret"
 
 #define GS_DOMAIN                       "storage.googleapis.com"
-
+#define GCS_OAUTH2_ACCESS_TOKEN         "access_token"
 
 /* GS-specific HTTP definitions */
 #define FILE_SIZE_HEADER                "x-goog-meta-gsbacker-filesize"
@@ -398,7 +398,7 @@ fail0:
 }
 
 static void
-http_io_gcs_auth_prepper(CURL *curl, struct http_io *io)
+gsb_http_io_gcs_auth_prepper(CURL *curl, struct http_io *io)
 {
     memset(&io->bufs, 0, sizeof(io->bufs));
     io->bufs.rdremain = io->buf_size;
@@ -441,7 +441,7 @@ update_gcs_auth_token(struct http_io_private *const priv)
     
    if((io.post_data = build_jwt_authrequest(priv)) != NULL){
       
-        if ((r = http_io_perform_io(priv, &io,http_io_gcs_auth_prepper)) != 0) {
+        if ((r = http_io_perform_io(priv, &io,gsb_http_io_gcs_auth_prepper)) != 0) {
              (*config->log)(LOG_ERR, "failed to acquire authorization toekn from google cloud storage from %s: %s", io.url, strerror(r));
              return r;
         }
@@ -458,7 +458,7 @@ update_gcs_auth_token(struct http_io_private *const priv)
     buf[buflen] = '\0';
     
     /* Find access toekn in JSON response */
-    if ((gs_accesstoken = parse_json_field(priv, buf, "access_token")) == NULL)
+    if ((gs_accesstoken = parse_json_field(priv, buf, GCS_OAUTH2_ACCESS_TOKEN)) == NULL)
       {
         (*config->log)(LOG_ERR, "failed to extract GCS access token from response: %s", strerror(errno));
         free(gs_accesstoken);

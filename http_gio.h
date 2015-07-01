@@ -51,6 +51,56 @@
 #define HTTP_DOWNLOAD       0
 #define HTTP_UPLOAD         1
 
+/* MIME type for mounted flag */
+#define MOUNTED_FLAG_CONTENT_TYPE   "text/plain"
+
+/* Mounted file object name */
+#define MOUNTED_FLAG                "cloudbacker-mounted"
+
+/* MIME type for blocks */
+#define CONTENT_TYPE                "application/x-cloudbacker-block"
+
+/* HTTP `Date' and `x-amz-date' header formats */
+#define HTTP_DATE_HEADER            "Date"
+#define HTTP_DATE_BUF_FMT           "%a, %d %b %Y %H:%M:%S GMT"
+#define DATE_BUF_SIZE               64
+
+/* Size required for URL buffer */
+#define URL_BUF_SIZE(config)        (strlen((config)->baseURL) + strlen((config)->bucket) \
+                                      + strlen((config)->prefix) + CLOUDBACKER_BLOCK_NUM_DIGITS + 2)
+
+/* Bucket listing API constants */
+#define LIST_PARAM_MARKER           "marker"
+#define LIST_PARAM_PREFIX           "prefix"
+#define LIST_PARAM_MAX_KEYS         "max-keys"
+
+#define LIST_ELEM_LIST_BUCKET_RESLT "ListBucketResult"
+#define LIST_ELEM_IS_TRUNCATED      "IsTruncated"
+#define LIST_ELEM_CONTENTS          "Contents"
+#define LIST_ELEM_KEY               "Key"
+#define LIST_TRUE                   "true"
+#define LIST_MAX_PATH               (sizeof(LIST_ELEM_LIST_BUCKET_RESLT) \
+                                      + sizeof(LIST_ELEM_CONTENTS) \
+                                      + sizeof(LIST_ELEM_KEY) + 1)
+
+/* How many blocks to list at a time */
+#define LIST_BLOCKS_CHUNK           0x100
+
+/* PBKDF2 key generation iterations */
+#define PBKDF2_ITERATIONS           5000
+
+/* Enable to debug encryption key stuff */
+#define DEBUG_ENCRYPTION            0
+
+/* Enable to debug authentication stuff */
+#define DEBUG_AUTHENTICATION        0
+
+#define WHITESPACE                  " \t\v\f\r\n"
+
+
+/* GSB Specific */
+#define GCS_AUTHENTICATION_URL      "https://www.googleapis.com/oauth2/v3/token"
+
 typedef enum {GS_STORAGE, S3_STORAGE}storage_type;
 
 /* Statistics structure for http_io store */
@@ -137,6 +187,9 @@ typedef void (*header_parser_t)(char *buf, struct http_io *io);
 
 /* I/O state when reading/writing a block */
 struct http_io {
+    
+    // post data for post request
+    char *post_data;
 
     // I/O buffers
     struct http_io_bufs bufs;
@@ -165,7 +218,7 @@ struct http_io {
     struct curl_slist   *headers;               // HTTP headers
     void                *dest;                  // Block data (when reading)
     const void          *src;                   // Block data (when writing)
-    cb_block_t         block_num;              // The block we're reading/writing
+    cb_block_t          block_num;              // The block we're reading/writing
     u_int               buf_size;               // Size of data buffer
     u_int               *content_lengthp;       // Returned Content-Length
     uintmax_t           file_size;              // file size from "x-amz-meta-s3backer-filesize"
@@ -189,7 +242,7 @@ struct http_io_gsb{
 
 /* Generic configuration info structure for http_io store */
 struct http_io_conf {
-    //struct auth_conf	auth;
+
     struct http_io_s3b  http_s3b;
     struct http_io_gsb  http_gsb;
     char       		*bucket;
@@ -225,12 +278,13 @@ void http_io_get_stats(struct cloudbacker_store *backerstore, struct http_io_sta
 int http_io_parse_block(struct http_io_conf *config, const char *name, cb_block_t *block_num);
 
 /* CURL prepper functions */
-typedef void http_io_curl_prepper_t(CURL *curl, struct http_io *io);
+typedef void http_io_curl_prepper_t(CURL *curl, struct http_io *io );
 
 void http_io_head_prepper(CURL *curl, struct http_io *io);
 void http_io_read_prepper(CURL *curl, struct http_io *io);
 void http_io_write_prepper(CURL *curl, struct http_io *io);
 void http_io_list_prepper(CURL *curl, struct http_io *io);
+void http_io_post_prepper(CURL *curl, struct http_io *io, const char *post_data);
 
 /* Generic http transport functionality */
 int http_io_perform_io(struct http_io_private *priv, struct http_io *io, http_io_curl_prepper_t *prepper);
@@ -249,13 +303,29 @@ int http_io_is_zero_block(const void *data, u_int block_size);
 int http_io_parse_hex(const char *str, u_char *buf, u_int nbytes);
 void http_io_prhex(char *buf, const u_char *data, size_t len);
 int http_io_strcasecmp_ptr(const void *ptr1, const void *ptr2);
+char *parse_json_field(struct http_io_private *priv, const char *json, const char *field);
 
 void http_io_openssl_locker(int mode, int i, const char *file, int line);
 u_long http_io_openssl_ider(void);
 void http_io_base64_encode(char *buf, size_t bufsiz, const void *data, size_t len);
 
+/* encryption, signing and hash fucntions */
+u_int http_io_crypt(struct http_io_private *priv, cb_block_t block_num, int enc, const u_char *src, u_int len, u_char *dst);
+void http_io_authsig(struct http_io_private *priv, cb_block_t block_num, const u_char *src, u_int len, u_char *hmac);
+void update_hmac_from_header(HMAC_CTX *ctx, struct http_io *io, const char *name, int value_only, char *sigbuf, size_t sigbuflen);
+
+/* Bucket listing functions */
+void http_io_list_elem_start(void *arg, const XML_Char *name, const XML_Char **atts);
+void http_io_list_elem_end(void *arg, const XML_Char *name);
+void http_io_list_text(void *arg, const XML_Char *s, int len);
+
+
+/* Internal variables */
+u_char zero_md5[MD5_DIGEST_LENGTH];
+u_char zero_hmac[SHA_DIGEST_LENGTH];
 
 /* Internal variables */
 pthread_mutex_t *openssl_locks;
 int num_openssl_locks;
+
 #endif

@@ -22,6 +22,7 @@
 
 #include "cloudbacker.h"
 #include "s3b_http_io.h"
+#include "gsb_http_io.h"
 #include "http_gio.h"
 
 /*
@@ -42,7 +43,7 @@ http_io_create(struct http_io_conf *config)
     }   
 
     if(config->storage_prefix == GS_STORAGE){
-        // backerstore = gsb_http_io_create(config);
+         backerstore = gsb_http_io_create(config);
     }
     else if(config->storage_prefix == S3_STORAGE){
         backerstore = s3b_http_io_create(config);
@@ -50,28 +51,47 @@ http_io_create(struct http_io_conf *config)
     return backerstore;
 }
 
-/*int
+int
 http_io_parse_block(struct http_io_conf *config, const char *name, cb_block_t *block_nump){
-    int r = 0;
-    if(config->storage_prefix == GS_STORAGE){
-        // r = gsb_http_io_parse_block(config, name, *block_nump);
-    }
-    else if(config->storage_prefix == S3_STORAGE){
-        r = s3b_http_io_parse_block(config, name, *block_nump);
+    
+    const size_t plen = strlen(config->prefix);
+    cb_block_t block_num = 0;
+    int i;
+
+    /* Check prefix */
+    if (strncmp(name, config->prefix, plen) != 0)
+        return -1;
+    name += plen;
+
+    /* Parse block number */
+    for (i = 0; i < CLOUDBACKER_BLOCK_NUM_DIGITS; i++) {
+        char ch = name[i];
+
+        if (!isxdigit(ch))
+            break;
+        block_num <<= 4;
+        block_num |= ch <= '9' ? ch - '0' : tolower(ch) - 'a' + 10;
     }
 
-    return r;
+    /* Was parse successful? */
+    if (i != CLOUDBACKER_BLOCK_NUM_DIGITS || name[i] != '\0' || block_num >= config->num_blocks)
+        return -1;
+
+    /* Done */
+    *block_nump = block_num;
+    return 0;
+
 }
 void
 http_io_get_stats(struct cloudbacker_store *backerstore, struct http_io_stats *stats){
 
-    if(config->storage_prefix == GS_STORAGE){
-       gsb_http_io_get_stats(backerstore, stats);
-    }
-    else if(config->storage_prefix == S3_STORAGE){
-       s3b_http_io_get_stats(backerstore, stats);
-    }
-}*/
+    struct http_io_private *const priv = backerstore->data;
+
+    pthread_mutex_lock(&priv->mutex);
+    memcpy(stats, &priv->stats, sizeof(*stats));
+    pthread_mutex_unlock(&priv->mutex);
+
+}
 /*
  * Perform HTTP operation.
  */
@@ -611,3 +631,230 @@ http_io_is_zero_block(const void *data, u_int block_size)
     }
     return 1;
 }
+/*
+ * Encrypt or decrypt one block
+ */
+u_int
+http_io_crypt(struct http_io_private *priv, cb_block_t block_num, int enc, const u_char *src, u_int len, u_char *dest)
+{
+    u_char ivec[EVP_MAX_IV_LENGTH];
+    EVP_CIPHER_CTX ctx;
+    u_int total_len;
+    char blockbuf[EVP_MAX_IV_LENGTH];
+    int clen;
+    int r;
+
+#ifdef NDEBUG
+    /* Avoid unused variable warning */
+    (void)r;
+#endif
+
+    /* Sanity check */
+    assert(EVP_MAX_IV_LENGTH >= MD5_DIGEST_LENGTH);
+
+    /* Initialize cipher context */
+    EVP_CIPHER_CTX_init(&ctx);
+
+    /* Generate initialization vector by encrypting the block number using previously generated IV */
+    memset(blockbuf, 0, sizeof(blockbuf));
+    snprintf(blockbuf, sizeof(blockbuf), "%0*jx", CLOUDBACKER_BLOCK_NUM_DIGITS, (uintmax_t)block_num);
+
+    /* Initialize cipher for IV generation */
+    r = EVP_EncryptInit_ex(&ctx, priv->cipher, NULL, priv->ivkey, priv->ivkey);
+    assert(r == 1);
+    EVP_CIPHER_CTX_set_padding(&ctx, 0);
+
+    /* Encrypt block number to get IV for bulk encryption */
+    r = EVP_EncryptUpdate(&ctx, ivec, &clen, (const u_char *)blockbuf, EVP_CIPHER_CTX_block_size(&ctx));
+ assert(r == 1 && clen == EVP_CIPHER_CTX_block_size(&ctx));
+    r = EVP_EncryptFinal_ex(&ctx, NULL, &clen);
+    assert(r == 1 && clen == 0);
+
+    /* Re-initialize cipher for bulk data encryption */
+    assert(EVP_CIPHER_CTX_block_size(&ctx) == EVP_CIPHER_CTX_iv_length(&ctx));
+    r = EVP_CipherInit_ex(&ctx, priv->cipher, NULL, priv->key, ivec, enc);
+    assert(r == 1);
+    EVP_CIPHER_CTX_set_padding(&ctx, 1);
+
+    /* Encrypt/decrypt */
+    r = EVP_CipherUpdate(&ctx, dest, &clen, src, (int)len);
+    assert(r == 1 && clen >= 0);
+    total_len = (u_int)clen;
+    r = EVP_CipherFinal_ex(&ctx, dest + total_len, &clen);
+    assert(r == 1 && clen >= 0);
+    total_len += (u_int)clen;
+
+    /* Encryption debug */
+#if DEBUG_ENCRYPTION
+{
+    struct http_io_conf *const config = priv->config;
+    char ivecbuf[sizeof(ivec) * 2 + 1];
+    http_io_prhex(ivecbuf, ivec, sizeof(ivec));
+    (*config->log)(LOG_DEBUG, "%sCRYPT: block=%s ivec=0x%s len: %d -> %d", (enc ? "EN" : "DE"), blockbuf, ivecbuf, len, total_len);
+}
+#endif
+
+    /* Done */
+    EVP_CIPHER_CTX_cleanup(&ctx);
+    return total_len;
+}
+
+void
+http_io_authsig(struct http_io_private *priv, cb_block_t block_num, const u_char *src, u_int len, u_char *hmac)
+{
+    const char *const ciphername = EVP_CIPHER_name(priv->cipher);
+    char blockbuf[64];
+    u_int hmac_len;
+    HMAC_CTX ctx;
+
+    /* Sign the block number, the name of the encryption algorithm, and the block data */
+    snprintf(blockbuf, sizeof(blockbuf), "%0*jx", CLOUDBACKER_BLOCK_NUM_DIGITS, (uintmax_t)block_num);
+    HMAC_CTX_init(&ctx);
+    HMAC_Init_ex(&ctx, (const u_char *)priv->key, priv->keylen, EVP_sha1(), NULL);
+    HMAC_Update(&ctx, (const u_char *)blockbuf, strlen(blockbuf));
+    HMAC_Update(&ctx, (const u_char *)ciphername, strlen(ciphername));
+    HMAC_Update(&ctx, (const u_char *)src, len);
+    HMAC_Final(&ctx, (u_char *)hmac, &hmac_len);
+    assert(hmac_len == SHA_DIGEST_LENGTH);
+    HMAC_CTX_cleanup(&ctx);
+}
+
+void
+update_hmac_from_header(HMAC_CTX *const ctx, struct http_io *const io,
+  const char *name, int value_only, char *sigbuf, size_t sigbuflen)
+{
+    const struct curl_slist *header;
+    const char *colon;
+    const char *value;
+    size_t name_len;
+
+    /* Find and add header */
+    name_len = (colon = strchr(name, ':')) != NULL ? colon - name : strlen(name);
+    for (header = io->headers; header != NULL; header = header->next) {
+        if (strncasecmp(header->data, name, name_len) == 0 && header->data[name_len] == ':') {
+            if (!value_only) {
+                HMAC_Update(ctx, (const u_char *)header->data, name_len + 1);
+#if DEBUG_AUTHENTICATION
+                snprintf(sigbuf + strlen(sigbuf), sigbuflen - strlen(sigbuf), "%.*s", name_len + 1, header->data);
+#endif
+            }
+            for (value = header->data + name_len + 1; isspace(*value); value++)
+                ;
+            HMAC_Update(ctx, (const u_char *)value, strlen(value));
+#if DEBUG_AUTHENTICATION
+            snprintf(sigbuf + strlen(sigbuf), sigbuflen - strlen(sigbuf), "%s", value);
+#endif
+            break;
+        }
+    }
+
+    /* Add newline whether or not header was found */
+    HMAC_Update(ctx, (const u_char *)"\n", 1);
+#if DEBUG_AUTHENTICATION
+    snprintf(sigbuf + strlen(sigbuf), sigbuflen - strlen(sigbuf), "\n");
+#endif
+}
+
+char *
+parse_json_field(struct http_io_private *priv, const char *json, const char *field)
+{
+    struct http_io_conf *const config = priv->config;
+    regmatch_t match[2];
+    regex_t regex;
+    char buf[128];
+    char *value;
+    size_t vlen;
+    int r;
+
+    snprintf(buf, sizeof(buf), "\"%s\"[[:space:]]*:[[:space:]]*\"([^\"]+)\"", field);
+    memset(&regex, 0, sizeof(regex));
+    if ((r = regcomp(&regex, buf, REG_EXTENDED)) != 0) {
+        regerror(r, &regex, buf, sizeof(buf));
+        (*config->log)(LOG_INFO, "regex compilation failed: %s", buf);
+        errno = EINVAL;
+        return NULL;
+    }
+    if ((r = regexec(&regex, json, sizeof(match) / sizeof(*match), match, 0)) != 0) {
+        regerror(r, &regex, buf, sizeof(buf));
+        (*config->log)(LOG_INFO, "failed to find JSON field \"%s\" in credentials response: %s", field, buf);
+        regfree(&regex);
+        errno = EINVAL;
+        return NULL;
+    }
+    regfree(&regex);
+    vlen = match[1].rm_eo - match[1].rm_so;
+    if ((value = malloc(vlen + 1)) == NULL) {
+        r = errno;
+        (*config->log)(LOG_INFO, "malloc: %s", strerror(r));
+        errno = r;
+        return NULL;
+    }
+    memcpy(value, json + match[1].rm_so, vlen);
+    value[vlen] = '\0';
+    return value;
+}
+
+void
+http_io_list_elem_start(void *arg, const XML_Char *name, const XML_Char **atts)
+{
+    struct http_io *const io = (struct http_io *)arg;
+    const size_t plen = strlen(io->xml_path);
+    char *newbuf;
+
+    /* Update current path */
+    if ((newbuf = realloc(io->xml_path, plen + 1 + strlen(name) + 1)) == NULL) {
+        (*io->config->log)(LOG_DEBUG, "realloc: %s", strerror(errno));
+        io->xml_error = XML_ERROR_NO_MEMORY;
+        return;
+    }
+    io->xml_path = newbuf;
+    io->xml_path[plen] = '/';
+    strcpy(io->xml_path + plen + 1, name);
+
+    /* Reset buffer */
+    io->xml_text_len = 0;
+    io->xml_text[0] = '\0';
+}
+
+void
+http_io_list_elem_end(void *arg, const XML_Char *name)
+{
+    struct http_io *const io = (struct http_io *)arg;
+    cb_block_t block_num;
+
+    /* Handle <Truncated> tag */
+    if (strcmp(io->xml_path, "/" LIST_ELEM_LIST_BUCKET_RESLT "/" LIST_ELEM_IS_TRUNCATED) == 0)
+        io->list_truncated = strcmp(io->xml_text, LIST_TRUE) == 0;
+
+    /* Handle <Key> tag */
+    else if (strcmp(io->xml_path, "/" LIST_ELEM_LIST_BUCKET_RESLT "/" LIST_ELEM_CONTENTS "/" LIST_ELEM_KEY) == 0) {
+        if (http_io_parse_block(io->config, io->xml_text, &block_num) == 0) {
+            (*io->callback_func)(io->callback_arg, block_num);
+            io->last_block = block_num;
+        }
+    }
+
+    /* Update current XML path */
+    assert(strrchr(io->xml_path, '/') != NULL);
+    *strrchr(io->xml_path, '/') = '\0';
+
+    /* Reset buffer */
+    io->xml_text_len = 0;
+    io->xml_text[0] = '\0';
+}
+
+void
+http_io_list_text(void *arg, const XML_Char *s, int len)
+{
+    struct http_io *const io = (struct http_io *)arg;
+    int avail;
+
+    /* Append text to buffer */
+    avail = io->xml_text_max - io->xml_text_len;
+    if (len > avail)
+        len = avail;
+    memcpy(io->xml_text + io->xml_text_len, s, len);
+    io->xml_text_len += len;
+    io->xml_text[io->xml_text_len] = '\0';
+}
+

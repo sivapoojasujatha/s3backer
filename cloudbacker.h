@@ -91,7 +91,7 @@ typedef uint32_t    cb_block_t;
 /*
  * How many hex digits we will use to print a block number.
  */
-#define S3B_BLOCK_NUM_DIGITS    ((int)(sizeof(cb_block_t) * 2))
+#define CLOUDBACKER_BLOCK_NUM_DIGITS    ((int)(sizeof(cb_block_t) * 2))
 
 /* Logging function type */
 typedef void        log_func_t(int level, const char *fmt, ...) __attribute__ ((__format__ (__printf__, 2, 3)));

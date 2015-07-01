@@ -129,19 +129,19 @@ test_io_read_block(struct cloudbacker_store *const s3b, cb_block_t block_num, vo
 
     /* Logging */
     if (config->debug)
-        (*config->log)(LOG_DEBUG, "test_io: read %0*jx started", S3B_BLOCK_NUM_DIGITS, (uintmax_t)block_num);
+        (*config->log)(LOG_DEBUG, "test_io: read %0*jx started", CLOUDBACKER_BLOCK_NUM_DIGITS, (uintmax_t)block_num);
 
     /* Random delay */
     usleep((random() % 200) * 1000);
 
     /* Random error */
     if ((random() % 100) < RANDOM_ERROR_PERCENT) {
-        (*config->log)(LOG_ERR, "test_io: random failure reading %0*jx", S3B_BLOCK_NUM_DIGITS, (uintmax_t)block_num);
+        (*config->log)(LOG_ERR, "test_io: random failure reading %0*jx", CLOUDBACKER_BLOCK_NUM_DIGITS, (uintmax_t)block_num);
         return EAGAIN;
     }
 
     /* Generate path */
-    snprintf(path, sizeof(path), "%s/%s%0*jx", config->bucket, config->prefix, S3B_BLOCK_NUM_DIGITS, (uintmax_t)block_num);
+    snprintf(path, sizeof(path), "%s/%s%0*jx", config->bucket, config->prefix, CLOUDBACKER_BLOCK_NUM_DIGITS, (uintmax_t)block_num);
 
     /* Read block */
     if ((fd = open(path, O_RDONLY)) != -1) {
@@ -209,7 +209,7 @@ test_io_read_block(struct cloudbacker_store *const s3b, cb_block_t block_num, vo
 
     /* Logging */
     if (config->debug) {
-        (*config->log)(LOG_DEBUG, "test_io: read %0*jx complete%s%s", S3B_BLOCK_NUM_DIGITS, (uintmax_t)block_num,
+        (*config->log)(LOG_DEBUG, "test_io: read %0*jx complete%s%s", CLOUDBACKER_BLOCK_NUM_DIGITS, (uintmax_t)block_num,
           zero_block ? " (zero)" : "", r == EEXIST ? " (expected md5 match)" : "");
     }
 
@@ -250,7 +250,7 @@ test_io_write_block(struct cloudbacker_store *const s3b, cb_block_t block_num, c
     /* Logging */
     if (config->debug) {
         (*config->log)(LOG_DEBUG, "test_io: write %0*jx started%s",
-          S3B_BLOCK_NUM_DIGITS, (uintmax_t)block_num, src == NULL ? " (zero block)" : "");
+          CLOUDBACKER_BLOCK_NUM_DIGITS, (uintmax_t)block_num, src == NULL ? " (zero block)" : "");
     }
 
     /* Random delay */
@@ -258,12 +258,12 @@ test_io_write_block(struct cloudbacker_store *const s3b, cb_block_t block_num, c
 
     /* Random error */
     if ((random() % 100) < RANDOM_ERROR_PERCENT) {
-        (*config->log)(LOG_ERR, "test_io: random failure writing %0*jx", S3B_BLOCK_NUM_DIGITS, (uintmax_t)block_num);
+        (*config->log)(LOG_ERR, "test_io: random failure writing %0*jx", CLOUDBACKER_BLOCK_NUM_DIGITS, (uintmax_t)block_num);
         return EAGAIN;
     }
 
     /* Generate path */
-    snprintf(path, sizeof(path), "%s/%s%0*jx", config->bucket, config->prefix, S3B_BLOCK_NUM_DIGITS, (uintmax_t)block_num);
+    snprintf(path, sizeof(path), "%s/%s%0*jx", config->bucket, config->prefix, CLOUDBACKER_BLOCK_NUM_DIGITS, (uintmax_t)block_num);
 
     /* Delete zero blocks */
     if (src == NULL) {
@@ -303,7 +303,7 @@ test_io_write_block(struct cloudbacker_store *const s3b, cb_block_t block_num, c
 
     /* Logging */
     if (config->debug)
-        (*config->log)(LOG_DEBUG, "test_io: write %0*jx complete", S3B_BLOCK_NUM_DIGITS, (uintmax_t)block_num);
+        (*config->log)(LOG_DEBUG, "test_io: write %0*jx complete", CLOUDBACKER_BLOCK_NUM_DIGITS, (uintmax_t)block_num);
 
     /* Done */
     return 0;

@@ -31,7 +31,5 @@
 
 /* s3b_http_io.c */
 struct cloudbacker_store *s3b_http_io_create(struct http_io_conf *config);
-//void s3b_http_io_get_stats(struct cloudbacker_store *backerstore, struct http_io_stats *stats);
-//int s3b_http_io_parse_block(struct http_io_conf *config, const char *name, cb_block_t *block_num);
 
 #endif

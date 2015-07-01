@@ -192,7 +192,7 @@ erase_thread_main(void *arg)
 
             /* Check for error */
             if (r != 0) {
-                warnx("can't delete block %0*jx: %s", S3B_BLOCK_NUM_DIGITS, (uintmax_t)block_num, strerror(r));
+                warnx("can't delete block %0*jx: %s", CLOUDBACKER_BLOCK_NUM_DIGITS, (uintmax_t)block_num, strerror(r));
                 continue;
             }
 

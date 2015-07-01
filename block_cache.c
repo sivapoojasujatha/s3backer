@@ -349,7 +349,7 @@ block_cache_dcache_load(void *arg, cb_block_t dslot, cb_block_t block_num, const
     /* Sanity check a block is not listed twice */
     if ((entry = cb_hash_get(priv->hashtable, block_num)) != NULL) {
         (*config->log)(LOG_ERR, "corrupted cache file: block 0x%0*jx listed twice (in dslots %ju and %ju)",
-          S3B_BLOCK_NUM_DIGITS, (uintmax_t)block_num, (uintmax_t)entry->u.dslot, (uintmax_t)dslot);
+          CLOUDBACKER_BLOCK_NUM_DIGITS, (uintmax_t)block_num, (uintmax_t)entry->u.dslot, (uintmax_t)dslot);
         return EINVAL;
     }
 
