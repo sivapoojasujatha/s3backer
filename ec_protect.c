@@ -111,7 +111,7 @@ struct cbinfo {
 };
 
 /* s3backer_store functions */
-static int ec_protect_meta_data(struct s3backer_store *s3b, off_t *file_sizep, u_int *block_sizep);
+static int ec_protect_meta_data(struct s3backer_store *s3b, off_t *file_sizep, u_int *block_sizep, u_int *name_hashp);
 static int ec_protect_set_mounted(struct s3backer_store *s3b, int *old_valuep, int new_value);
 static int ec_protect_read_block(struct s3backer_store *s3b, s3b_block_t block_num, void *dest,
   u_char *actual_md5, const u_char *expect_md5, int strict);
@@ -213,11 +213,11 @@ fail0:
 }
 
 static int
-ec_protect_meta_data(struct s3backer_store *s3b, off_t *file_sizep, u_int *block_sizep)
+ec_protect_meta_data(struct s3backer_store *s3b, off_t *file_sizep, u_int *block_sizep, u_int *name_hashp)
 {
     struct ec_protect_private *const priv = s3b->data;
 
-    return (*priv->inner->meta_data)(priv->inner, file_sizep, block_sizep);
+    return (*priv->inner->meta_data)(priv->inner, file_sizep, block_sizep, name_hashp);
 }
 
 static int

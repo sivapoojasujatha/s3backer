@@ -35,7 +35,7 @@ struct test_io_private {
 };
 
 /* s3backer_store functions */
-static int test_io_meta_data(struct s3backer_store *s3b, off_t *file_sizep, u_int *block_sizep);
+static int test_io_meta_data(struct s3backer_store *s3b, off_t *file_sizep, u_int *block_sizep, u_int *name_hashp);
 static int test_io_set_mounted(struct s3backer_store *s3b, int *old_valuep, int new_value);
 static int test_io_read_block(struct s3backer_store *s3b, s3b_block_t block_num, void *dest,
   u_char *actual_md5, const u_char *expect_md5, int strict);
@@ -86,7 +86,7 @@ test_io_create(struct http_io_conf *config)
 }
 
 static int
-test_io_meta_data(struct s3backer_store *s3b, off_t *file_sizep, u_int *block_sizep)
+test_io_meta_data(struct s3backer_store *s3b, off_t *file_sizep, u_int *block_sizep, uint *name_hashp)
 {
     return 0;
 }

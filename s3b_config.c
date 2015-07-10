@@ -130,14 +130,15 @@ static struct s3b_config config = {
 
     /* HTTP config */
     .http_io= {
-        .auth.u.s3.accessId=      NULL,
-        .auth.u.s3.accessKey=     NULL,
-        .auth.u.s3.accessType=    S3BACKER_DEFAULT_ACCESS_TYPE,
-        .auth.u.s3.authVersion=   S3BACKER_DEFAULT_AUTH_VERSION,
+        .auth.u.s3.accessId=    NULL,
+        .auth.u.s3.accessKey=   NULL,
+        .auth.u.s3.accessType=  S3BACKER_DEFAULT_ACCESS_TYPE,
+        .auth.u.s3.authVersion= S3BACKER_DEFAULT_AUTH_VERSION,
         .baseURL=               NULL,
         .region=                NULL,
         .bucket=                NULL,
         .prefix=                S3BACKER_DEFAULT_PREFIX,
+	.name_hash=	        0,
         .user_agent=            user_agent_buf,
         .compress=              S3BACKER_DEFAULT_COMPRESSION,
         .timeout=               S3BACKER_DEFAULT_TIMEOUT,
@@ -349,6 +350,11 @@ static const struct fuse_opt option_list[] = {
     {
         .templ=     "--prefix=%s",
         .offset=    offsetof(struct s3b_config, http_io.prefix),
+    },
+    {
+        .templ=     "--nameHash",
+        .offset=    offsetof(struct s3b_config, http_io.name_hash),
+        .value=     1
     },
     {
         .templ=     "--readOnly",
@@ -881,7 +887,7 @@ validate_config(void)
     const int customBaseURL = config.http_io.baseURL != NULL;
     const int customRegion = config.http_io.region != NULL;
     off_t auto_file_size;
-    u_int auto_block_size;
+    u_int auto_block_size, auto_name_hash;
     uintmax_t value;
     const char *s;
     char blockSizeBuf[64];
@@ -1256,8 +1262,8 @@ validate_config(void)
         if ((s3b = http_io_create(&config.http_io)) == NULL)
             err(1, "http_io_create");
         if (!config.quiet)
-            warnx("auto-detecting block size and total file size...");
-        r = (*s3b->meta_data)(s3b, &auto_file_size, &auto_block_size);
+            warnx("auto-detecting block size, total file size, and name hashing setting...");
+        r = (*s3b->meta_data)(s3b, &auto_file_size, &auto_block_size, &auto_name_hash);
         (*s3b->destroy)(s3b);
     }
 
@@ -1267,7 +1273,8 @@ validate_config(void)
         unparse_size_string(blockSizeBuf, sizeof(blockSizeBuf), (uintmax_t)auto_block_size);
         unparse_size_string(fileSizeBuf, sizeof(fileSizeBuf), (uintmax_t)auto_file_size);
         if (!config.quiet)
-            warnx("auto-detected block size=%s and total size=%s", blockSizeBuf, fileSizeBuf);
+            warnx("auto-detected block size=%s, total size=%s, name hashing='%s'",
+		  blockSizeBuf, fileSizeBuf, auto_name_hash ? "yes" : "no");
         if (config.block_size == 0)
             config.block_size = auto_block_size;
         else if (auto_block_size != config.block_size) {
@@ -1298,6 +1305,24 @@ validate_config(void)
             } else
                 errx(1, "error: configured file size %s != filesystem file size %s", buf, fileSizeBuf);
         }
+        if (config.http_io.name_hash == 0)
+            config.http_io.name_hash = auto_name_hash;
+        else if (auto_name_hash != config.http_io.name_hash) {
+
+            if (config.force) {
+                if (!config.quiet) {
+                    warnx("warning: configured name hashing setting '%s' != filesystem name hashing "
+			  "setting '%s',\nbut you said `--force' so I'll proceed anyway even though "
+			  "your object names will probably not be interpreted correctly.",
+			  config.http_io.name_hash ? "yes" : "no",
+			  auto_name_hash ? "yes" : "no");
+                }
+            } else
+                errx(1, "error: configured name hashing setting '%s' != filesystem name hashing setting '%s'",
+		     config.http_io.name_hash ? "yes" : "no",
+		     auto_name_hash ? "yes" : "no");
+
+        }
         break;
     case ENOENT:
     {
@@ -1311,8 +1336,9 @@ validate_config(void)
         unparse_size_string(blockSizeBuf, sizeof(blockSizeBuf), (uintmax_t)config.block_size);
         unparse_size_string(fileSizeBuf, sizeof(fileSizeBuf), (uintmax_t)config.file_size);
         if (!config.quiet) {
-            warnx("auto-detection %s; using %s block size %s and file size %s", why,
-              config_block_size == 0 ? "default" : "configured", blockSizeBuf, fileSizeBuf);
+            warnx("auto-detection %s; using %s block size %s, file size %s, name hashing setting '%s'", why,
+		  config_block_size == 0 ? "default" : "configured", blockSizeBuf, fileSizeBuf,
+		  config.http_io.name_hash ? "yes" : "no");
         }
         break;
     }
@@ -1514,6 +1540,7 @@ dump_config(void)
     (*config.log)(LOG_DEBUG, "%24s: \"%s\"", "region", config.http_io.region);
     (*config.log)(LOG_DEBUG, "%24s: \"%s\"", config.test ? "testdir" : "bucket", config.http_io.bucket);
     (*config.log)(LOG_DEBUG, "%24s: \"%s\"", "prefix", config.http_io.prefix);
+    (*config.log)(LOG_DEBUG, "%24s: %s", "name hash", config.http_io.name_hash ? "yes" : "no");
     (*config.log)(LOG_DEBUG, "%24s: %s", "list_blocks", config.list_blocks ? "true" : "false");
     (*config.log)(LOG_DEBUG, "%24s: \"%s\"", "mount", config.mount);
     (*config.log)(LOG_DEBUG, "%24s: \"%s\"", "filename", config.fuse_ops.filename);

@@ -37,6 +37,7 @@
 /* S3-specific HTTP definitions */
 #define FILE_SIZE_HEADER            "x-amz-meta-s3backer-filesize"
 #define BLOCK_SIZE_HEADER           "x-amz-meta-s3backer-blocksize"
+#define NAME_HASH_HEADER            "x-amz-meta-s3backer-namehash"
 #define HMAC_HEADER                 "x-amz-meta-s3backer-hmac"
 #define ACL_HEADER                  "x-amz-acl"
 #define CONTENT_SHA256_HEADER       "x-amz-content-sha256"
@@ -102,7 +103,7 @@
  */
 
 /* s3backer_store functions */
-static int http_io_meta_data(struct s3backer_store *s3b, off_t *file_sizep, u_int *block_sizep);
+static int http_io_meta_data(struct s3backer_store *s3b, off_t *file_sizep, u_int *block_sizep, u_int *name_hashp);
 static int http_io_set_mounted(struct s3backer_store *s3b, int *old_valuep, int new_value);
 static int http_io_read_block(struct s3backer_store *s3b, s3b_block_t block_num, void *dest,
   u_char *actual_md5, const u_char *expect_md5, int strict);
@@ -146,6 +147,7 @@ static int http_io_strcasecmp_ptr(const void *ptr1, const void *ptr2);
 
 static void file_size_parser(char *buf, struct http_io *io);
 static void block_size_parser(char *buf, struct http_io *io);
+static void name_hash_parser(char *buf, struct http_io *io);
 static void etag_parser(char *buf, struct http_io *io);
 static void hmac_parser(char *buf, struct http_io *io);
 static void encoding_parser(char *buf, struct http_io *io);
@@ -158,8 +160,8 @@ static u_char zero_hmac[SHA_DIGEST_LENGTH];
 
 /* NULL-terminated vector of header parsers for S3 */
 static header_parser_t s3b_header_parser[] = {
-  file_size_parser, block_size_parser, etag_parser,
-  hmac_parser, encoding_parser, NULL
+  file_size_parser, block_size_parser, name_hash_parser,
+  etag_parser, hmac_parser, encoding_parser, NULL
 };
 
 /*
@@ -406,6 +408,37 @@ http_io_add_date(struct http_io_private *const priv, struct http_io *const io, t
     }
 }
 
+/*
+ * Improve S3 name hashing by reversing the bit sequence of the block number. 
+ *
+ * Using this approach results in creating two different name spaces for the
+ * object names - one 'logical', where object name is a string representation
+ * of the corresponding block number, and one 'on the wire', where the name
+ * is a string representation of the bit-reversed block number.
+ *
+ * The 'logical' names are used internally by s3backer, and the names are
+ * conversted to the 'on the wire' representation when placed in the HTTP
+ * requests. Similarly, the object names that are parsed out from the bucket
+ * list reply need to be converted to the 'logical' names before acted upon,
+ * and the markers for the list functions need to be converted to the 'on the
+ * wire' format for the iterative list operations to perform properly.
+ */
+static s3b_block_t bit_reverse(s3b_block_t block_num)
+{
+    int nbits = sizeof(s3b_block_t) * 8;
+    s3b_block_t reversed_block_num = (s3b_block_t)0;
+    int b, ib;
+
+    if (block_num == 0) return block_num;
+
+    for (b = nbits - 1, ib = 0; b >= 0; b--, ib++) {
+	unsigned char bit = (block_num & (1 << b)) >> b;
+	reversed_block_num |= bit << ib;
+    }
+
+    return reversed_block_num;
+}
+
 static int
 http_io_list_blocks(struct s3backer_store *s3b, block_list_func_t *callback, void *arg)
 {
@@ -456,10 +489,14 @@ http_io_list_blocks(struct s3backer_store *s3b, block_list_func_t *callback, voi
         /* Format URL */
         snprintf(urlbuf, sizeof(urlbuf), "%s%s?", config->baseURL, config->vhost ? "" : config->bucket);
 
-        /* Add URL parameters (note: must be in "canonical query string" format for proper authentication) */
+        /*
+	 * Add URL parameters (note: must be in "canonical query string" format for proper authentication).
+	 * Careful to remember about block number bit reversal when recording the marker.
+	 */
         if (io.list_truncated) {
             snprintf(urlbuf + strlen(urlbuf), sizeof(urlbuf) - strlen(urlbuf), "%s=%s%0*jx&",
-              LIST_PARAM_MARKER, config->prefix, S3B_BLOCK_NUM_DIGITS, (uintmax_t)io.last_block);
+		     LIST_PARAM_MARKER, config->prefix, S3B_BLOCK_NUM_DIGITS, 
+		     config->name_hash ? (uintmax_t)bit_reverse(io.last_block) : (uintmax_t)io.last_block);
         }
         snprintf(urlbuf + strlen(urlbuf), sizeof(urlbuf) - strlen(urlbuf), "%s=%u", LIST_PARAM_MAX_KEYS, LIST_BLOCKS_CHUNK);
         snprintf(urlbuf + strlen(urlbuf), sizeof(urlbuf) - strlen(urlbuf), "&%s=%s", LIST_PARAM_PREFIX, config->prefix);
@@ -529,6 +566,17 @@ static void file_size_parser(char *buf, struct http_io *io)
 static void block_size_parser(char *buf, struct http_io *io)
 {
     (void)sscanf(buf, BLOCK_SIZE_HEADER ": %u", &io->block_size);
+}
+
+static void name_hash_parser(char *buf, struct http_io *io)
+{
+    char pbuf[8];
+    if (sscanf(buf, NAME_HASH_HEADER ": %s", pbuf)) {
+	if (strncmp(pbuf, "yes", sizeof("yes")) == 0) 
+	    io->name_hash = 1;
+	else
+	    io->name_hash = 0;
+    }
 }
 
 static void etag_parser(char *buf, struct http_io *io)
@@ -637,6 +685,13 @@ http_io_list_text(void *arg, const XML_Char *s, int len)
 
 /*
  * Parse a block's item name (including prefix) and set the corresponding bit in the bitmap.
+ *
+ * The assumption is that there might be various objects in the bucket, e.g. ones created
+ * with and without a given prefix, while the operating instance is invoked without the
+ * explicit '--prefix' argument. In this case, the correct behavior is to silently ignore
+ * the objects whose name does not parse properly.
+ * In other cases, however, the somewhat relaxed parsing behavior might lead to errors
+ * gone unnoticed, and --listBlocks/--erase not quite working properly.
  */
 int
 http_io_parse_block(struct http_io_conf *config, const char *name, s3b_block_t *block_nump)
@@ -660,6 +715,9 @@ http_io_parse_block(struct http_io_conf *config, const char *name, s3b_block_t *
         block_num |= ch <= '9' ? ch - '0' : tolower(ch) - 'a' + 10;
     }
 
+    if (config->name_hash)
+      block_num = bit_reverse(block_num);
+
     /* Was parse successful? */
     if (i != S3B_BLOCK_NUM_DIGITS || name[i] != '\0' || block_num >= config->num_blocks)
         return -1;
@@ -670,7 +728,7 @@ http_io_parse_block(struct http_io_conf *config, const char *name, s3b_block_t *
 }
 
 static int
-http_io_meta_data(struct s3backer_store *s3b, off_t *file_sizep, u_int *block_sizep)
+http_io_meta_data(struct s3backer_store *s3b, off_t *file_sizep, u_int *block_sizep, u_int *name_hashp)
 {
     struct http_io_private *const priv = s3b->data;
     struct http_io_conf *const config = priv->config;
@@ -706,6 +764,7 @@ http_io_meta_data(struct s3backer_store *s3b, off_t *file_sizep, u_int *block_si
     }
     *file_sizep = (off_t)io.file_size;
     *block_sizep = io.block_size;
+    *name_hashp = io.name_hash;
 
 done:
     /*  Clean up */
@@ -1415,6 +1474,8 @@ http_io_write_block(struct s3backer_store *const s3b, s3b_block_t block_num, con
         io.headers = http_io_add_header(io.headers, "%s: %u", BLOCK_SIZE_HEADER, config->block_size);
         io.headers = http_io_add_header(io.headers, "%s: %ju",
           FILE_SIZE_HEADER, (uintmax_t)(config->block_size * config->num_blocks));
+        io.headers = http_io_add_header(io.headers, "%s: %s",
+	  NAME_HASH_HEADER, config->name_hash ? "yes" : "no");
     }
 
     /* Add signature header (if encrypting) */
@@ -1909,25 +1970,6 @@ fail:
  * Create URL for a block, and return pointer to the URL's URI path.
  */
 
-/*
- * Improve S3 name hashing by reversing the bit sequence of the block number
- */
-static s3b_block_t bit_reverse(s3b_block_t block_num)
-{
-    int nbits = sizeof(s3b_block_t) * 8;
-    s3b_block_t reversed_block_num = (s3b_block_t)0;
-    int b, ib;
-
-    if (block_num == 0) return block_num;
-
-    for (b = nbits - 1, ib = 0; b >= 0; b--, ib++) {
-	unsigned char bit = (block_num & (1 << b)) >> b;
-	reversed_block_num |= bit << ib;
-    }
-
-    return reversed_block_num;
-}
-
 static void
 http_io_get_block_url(char *buf, size_t bufsiz, struct http_io_conf *config, s3b_block_t block_num)
 {
@@ -1935,11 +1977,11 @@ http_io_get_block_url(char *buf, size_t bufsiz, struct http_io_conf *config, s3b
 
     if (config->vhost)
         len = snprintf(buf, bufsiz, "%s%s%0*jx", config->baseURL, config->prefix, S3B_BLOCK_NUM_DIGITS,
-                       (uintmax_t)(bit_reverse(block_num)));
+                       config->name_hash ? (uintmax_t)bit_reverse(block_num) : (uintmax_t)block_num);
     else {
         len = snprintf(buf, bufsiz, "%s%s/%s%0*jx", config->baseURL,
                        config->bucket, config->prefix, S3B_BLOCK_NUM_DIGITS,
-                       (uintmax_t)(bit_reverse(block_num)));
+                       config->name_hash ? (uintmax_t)bit_reverse(block_num) : (uintmax_t)block_num);
     }
     (void)len;                  /* avoid compiler warning when NDEBUG defined */
     assert(len < bufsiz);

@@ -168,6 +168,7 @@ struct http_io {
     u_int               *content_lengthp;       // Returned Content-Length
     uintmax_t           file_size;              // file size from "x-amz-meta-s3backer-filesize"
     u_int               block_size;             // block size from "x-amz-meta-s3backer-blocksize"
+    u_int		name_hash;		// object name hashing from "x-amz-meta-s3backer-namehash"
     u_int               expect_304;             // a verify request; expect a 304 response
     u_char              md5[MD5_DIGEST_LENGTH]; // parsed ETag header
     u_char              hmac[SHA_DIGEST_LENGTH];// parsed "x-amz-meta-s3backer-hmac" header
@@ -188,6 +189,7 @@ struct http_io_conf {
     const char          *password;
     const char          *encryption;
     u_int               key_length;
+    u_int		name_hash;
     int                 debug;
     int                 debug_http;
     int                 quiet;

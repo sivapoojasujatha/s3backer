@@ -111,6 +111,7 @@ struct s3backer_store {
      * The information we acquire is:
      *  o Block size
      *  o Total size
+     *  o Name hashing (on/off)
      *
      * Returns:
      *
@@ -118,7 +119,7 @@ struct s3backer_store {
      *  ENOENT  Information not found
      *  Other   Other error
      */
-    int         (*meta_data)(struct s3backer_store *s3b, off_t *file_sizep, u_int *block_sizep);
+  int         (*meta_data)(struct s3backer_store *s3b, off_t *file_sizep, u_int *block_sizep, u_int *name_hashp);
 
     /*
      * Read and (optionally) set the mounted flag.
