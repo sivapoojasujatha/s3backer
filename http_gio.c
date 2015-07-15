@@ -1,6 +1,4 @@
-
 /*
- * s3backer - FUSE-based single file backing store via Amazon S3
  * 
  * Copyright 2008-2011 Archie L. Cobbs <archie@dellroad.org>
  * 
@@ -21,8 +19,7 @@
  */
 
 #include "cloudbacker.h"
-#include "s3b_http_io.h"
-#include "gsb_http_io.h"
+#include "cb_http_io.h"
 #include "http_gio.h"
 
 /*
@@ -43,14 +40,57 @@ http_io_create(struct http_io_conf *config)
     }   
 
     if(config->storage_prefix == GS_STORAGE){
-         backerstore = gsb_http_io_create(config);
+         backerstore = cb_http_io_create(config);
     }
     else if(config->storage_prefix == S3_STORAGE){
-        backerstore = s3b_http_io_create(config);
+        backerstore = cb_http_io_create(config);
     }
     return backerstore;
 }
 
+/*
+ * Improve S3 name hashing by reversing the bit sequence of the block number.
+ * 
+ * Using this approach results in creating two different name spaces for the
+ * object names - one 'logical', where object name is a string representation
+ * of the corresponding block number, and one 'on the wire', where the name
+ * is a string representation of the bit-reversed block number.
+ * 
+ * The 'logical' names are used internally by s3backer, and the names are
+ * conversted to the 'on the wire' representation when placed in the HTTP
+ * requests. Similarly, the object names that are parsed out from the bucket
+ * list reply need to be converted to the 'logical' names before acted upon,
+ * and the markers for the list functions need to be converted to the 'on the
+ * wire' format for the iterative list operations to perform properly.
+ */
+cb_block_t bit_reverse(cb_block_t block_num)
+{
+    int nbits = sizeof(cb_block_t) * 8;
+    cb_block_t reversed_block_num = (cb_block_t)0;
+    int b, ib;
+
+    if (block_num == 0) return block_num;
+
+    for (b = nbits - 1, ib = 0; b >= 0; b--, ib++) {
+        unsigned char bit = (block_num & (1 << b)) >> b;
+        reversed_block_num |= bit << ib;
+    }
+
+    return reversed_block_num;
+}
+
+/*
+============================================================================================
+* Parse a block's item name (including prefix) and set the corresponding bit in the bitmap.
+*
+* The assumption is that there might be various objects in the bucket, e.g. ones created
+* with and without a given prefix, while the operating instance is invoked without the
+* explicit '--prefix' argument. In this case, the correct behavior is to silently ignore
+* the objects whose name does not parse properly.
+* In other cases, however, the somewhat relaxed parsing behavior might lead to errors
+* gone unnoticed, and --listBlocks/--erase not quite working properly.
+============================================================================================
+*/
 int
 http_io_parse_block(struct http_io_conf *config, const char *name, cb_block_t *block_nump){
     
@@ -60,7 +100,7 @@ http_io_parse_block(struct http_io_conf *config, const char *name, cb_block_t *b
 
     /* Check prefix */
     if (strncmp(name, config->prefix, plen) != 0)
-        return -1;
+	  return -1;
     name += plen;
 
     /* Parse block number */
@@ -70,12 +110,16 @@ http_io_parse_block(struct http_io_conf *config, const char *name, cb_block_t *b
         if (!isxdigit(ch))
             break;
         block_num <<= 4;
-        block_num |= ch <= '9' ? ch - '0' : tolower(ch) - 'a' + 10;
+        block_num |= ((ch <= '9') ? (ch - '0') : ((tolower(ch) - 'a') + 10));
     }
+
+    if (config->name_hash)
+      block_num = bit_reverse(block_num);
 
     /* Was parse successful? */
     if (i != CLOUDBACKER_BLOCK_NUM_DIGITS || name[i] != '\0' || block_num >= config->num_blocks)
-        return -1;
+          return -1;
+
 
     /* Done */
     *block_nump = block_num;
@@ -108,6 +152,7 @@ http_io_perform_io(struct http_io_private *priv, struct http_io *io, http_io_cur
     int attempt;
     CURL *curl;
 
+    io->config = config;
     /* Debug */
     if (config->debug)
         (*config->log)(LOG_DEBUG, "%s %s", io->method, io->url);
@@ -824,16 +869,16 @@ http_io_list_elem_end(void *arg, const XML_Char *name)
 
     /* Handle <Truncated> tag */
     if (strcmp(io->xml_path, "/" LIST_ELEM_LIST_BUCKET_RESLT "/" LIST_ELEM_IS_TRUNCATED) == 0)
-        io->list_truncated = strcmp(io->xml_text, LIST_TRUE) == 0;
+       io->list_truncated = (strcmp(io->xml_text, LIST_TRUE) == 0);
 
     /* Handle <Key> tag */
     else if (strcmp(io->xml_path, "/" LIST_ELEM_LIST_BUCKET_RESLT "/" LIST_ELEM_CONTENTS "/" LIST_ELEM_KEY) == 0) {
         if (http_io_parse_block(io->config, io->xml_text, &block_num) == 0) {
-            (*io->callback_func)(io->callback_arg, block_num);
-            io->last_block = block_num;
+            (*io->callback_func)(io->callback_arg,block_num);
+            io->last_block = block_num; 
         }
     }
-
+   
     /* Update current XML path */
     assert(strrchr(io->xml_path, '/') != NULL);
     *strrchr(io->xml_path, '/') = '\0';

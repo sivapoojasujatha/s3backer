@@ -20,7 +20,11 @@
  * 02110-1301, USA.
  */
 
-/* Configuration info structure for block_cache */
+/* 
+====================================================================
+*********** Configuration info structure for block_cache ***********
+====================================================================
+*/
 struct block_cache_conf {
     u_int               block_size;
     u_int               cache_size;
@@ -36,7 +40,12 @@ struct block_cache_conf {
     log_func_t          *log;
 };
 
-/* Statistics structure for block_cache */
+/*
+====================================================================
+************** Statistics structure for block_cache ****************
+====================================================================
+*/
+
 struct block_cache_stats {
     u_int               initial_size;
     u_int               current_size;
@@ -50,7 +59,12 @@ struct block_cache_stats {
     u_int               out_of_memory_errors;
 };
 
-/* block_cache.c */
+/*
+====================================================================
+**************  block_cache.c - specific functions  ****************
+====================================================================
+*/
+
 extern struct cloudbacker_store *block_cache_create(struct block_cache_conf *config, struct cloudbacker_store *inner);
 extern void block_cache_get_stats(struct cloudbacker_store *backerstore, struct block_cache_stats *stats);
 

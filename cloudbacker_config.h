@@ -25,7 +25,11 @@
 
 #include "http_gio.h"
 
-/* Overal application configuration info */
+/*
+======================================================================================
+**********************  Overal application configuration info  ***********************
+======================================================================================
+*/
 typedef struct cloudbacker_config {
 
     /* Various sub-module configurations */

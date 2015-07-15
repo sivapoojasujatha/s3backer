@@ -26,7 +26,12 @@
 #include <sys/stat.h>
 #include <sys/queue.h>
 
-/* Add some queue.h definitions missing on Linux */
+/*
+========================================================================================================
+**************************  Add some queue.h definitions missing on Linux ******************************
+========================================================================================================
+*/
+
 #ifndef LIST_FIRST
 #define LIST_FIRST(head)        ((head)->lh_first)
 #endif
@@ -75,7 +80,12 @@
 #define FUSE_OPT_KEY_DISCARD -4
 #endif
 
-/* In case we don't have glibc >= 2.18 */
+/*
+========================================================================================================
+*********************************  In case we don't have glibc >= 2.18 *********************************
+========================================================================================================
+*/
+
 #ifndef FALLOC_FL_KEEP_SIZE
 #define FALLOC_FL_KEEP_SIZE     0x01
 #endif
@@ -84,25 +94,49 @@
 #endif
 
 /*
- * Integral type for holding a block number.
- */
+========================================================================================================
+*******************************  Integral type for holding a block number.  ****************************
+========================================================================================================
+*/
 typedef uint32_t    cb_block_t;
 
 /*
- * How many hex digits we will use to print a block number.
- */
+========================================================================================================
+********************   How many hex digits we will use to print a block number.    *********************
+========================================================================================================
+*/
 #define CLOUDBACKER_BLOCK_NUM_DIGITS    ((int)(sizeof(cb_block_t) * 2))
 
-/* Logging function type */
+/*
+========================================================================================================
+***********************************   Logging function type  *******************************************
+========================================================================================================
+*/
+
 typedef void        log_func_t(int level, const char *fmt, ...) __attribute__ ((__format__ (__printf__, 2, 3)));
 
-/* Block list callback function type */
+/*
+========================================================================================================
+******************************   Block list callback function type  ************************************
+========================================================================================================
+*/
+
 typedef void        block_list_func_t(void *arg, cb_block_t block_num);
 
-/* Block write cancel check function type */
+/*
+========================================================================================================
+******************************    Block write cancel check function type  ******************************
+========================================================================================================
+*/
 typedef int         check_cancel_t(void *arg, cb_block_t block_num);
 
-/* Backing store instance structure */
+
+/*
+========================================================================================================
+**********************************  Backing store instance structure  **********************************
+========================================================================================================
+*/
+
 struct cloudbacker_store {
     /*
      * Get meta-data associated with the underlying store.
@@ -110,6 +144,7 @@ struct cloudbacker_store {
      * The information we acquire is:
      *  o Block size
      *  o Total size
+     *  o Name hashing (on/off)
      *
      * Returns:
      *
@@ -117,7 +152,7 @@ struct cloudbacker_store {
      *  ENOENT  Information not found
      *  Other   Other error
      */
-    int         (*meta_data)(struct cloudbacker_store *backerstore, off_t *file_sizep, u_int *block_sizep);
+    int         (*meta_data)(struct cloudbacker_store *backerstore, off_t *file_sizep, u_int *block_sizep, u_int *name_hashp);
 
     /*
      * Read and (optionally) set the mounted flag.

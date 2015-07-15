@@ -44,6 +44,7 @@
 #define MD5_HEADER                  "Content-MD5"
 #define SCLASS_STANDARD             "STANDARD"
 #define SCLASS_REDUCED_REDUNDANCY   "REDUCED_REDUNDANCY"
+#define SCLASS_NEARLINE		    "NEARLINE"		
 #define IF_MATCH_HEADER             "If-Match"
 #define IF_NONE_MATCH_HEADER        "If-None-Match"
 
@@ -157,9 +158,37 @@ struct curl_holder {
     LIST_ENTRY(curl_holder)     link;
 };
 
+typedef struct http_io_parameters{
+	char file_size_header[32];
+	char block_size_header[32];
+	u_int block_size_headerval;
+	char HMAC_Header[32];       
+	char HMAC_Headerval[32];
+        char name_hash_header[32];
+	char acl_header[32];
+        char acl_headerval[64];
+	char content_sha256_header[24];
+	char storage_class_header[24];
+        char storage_class_headerval[32];
+	char date_header[24];
+	char date_buf_fmt[64];
+	char signature_algorithm[32];
+	char accessKey_prefix[16];
+	char service_name[32];
+	char signature_terminator[16];
+	char security_token_header[32];
+	char ec2_iam_meta_data_urlbase[96];
+	char ec2_iam_meta_data_accessID[16];
+	char ec2_iam_meta_data_accessKey[24];
+	char ec2_iam_meta_data_token[8];
+	char cb_domain[24];
+      
+}http_io_parameters;
+
 struct http_io_private {
     struct http_io_conf         *config;
     struct http_io_stats        stats;
+    //struct http_io_parameters *http_io_params;
     LIST_HEAD(, curl_holder)    curls;
     pthread_mutex_t             mutex;
     u_int                       *non_zero;      // config->nonzero_bitmap is moved to here
@@ -208,6 +237,7 @@ struct http_io {
     int                 xml_text_max;           // max chars in 'xml_text' buffer
     int                 list_truncated;         // returned list was truncated
     cb_block_t         last_block;             // last dirty block listed
+    char 	       last_block_name[16];
     block_list_func_t   *callback_func;         // callback func for listing blocks
     void                *callback_arg;          // callback arg for listing blocks
     struct http_io_conf *config;                // configuration
@@ -223,6 +253,7 @@ struct http_io {
     u_int               *content_lengthp;       // Returned Content-Length
     uintmax_t           file_size;              // file size from "x-amz-meta-s3backer-filesize"
     u_int               block_size;             // block size from "x-amz-meta-s3backer-blocksize"
+    u_int		name_hash;		// object name hashing from "x-amz-meta-s3backer-namehash"
     u_int               expect_304;             // a verify request; expect a 304 response
     u_char              md5[MD5_DIGEST_LENGTH]; // parsed ETag header
     u_char              hmac[SHA_DIGEST_LENGTH];// parsed "x-amz-meta-s3backer-hmac" header
@@ -246,6 +277,8 @@ struct http_io_conf {
     struct http_io_s3b  http_s3b;
     struct http_io_gsb  http_gsb;
     char       		*bucket;
+    const char          *accessType;	
+    const char 		*authVersion;
     const char          *baseURL;
     const char          *region;    
     const char          *prefix;
@@ -253,7 +286,9 @@ struct http_io_conf {
     const char          *cacert;
     const char          *password;
     const char          *encryption;
+    const char 		*storageClass;
     u_int               key_length;
+    u_int		name_hash;		    // object name hashing from "x-amz-meta-s3backer-namehash"
     int                 debug;
     int                 debug_http;
     int                 quiet;
@@ -270,6 +305,7 @@ struct http_io_conf {
     u_int               max_retry_pause;
     uintmax_t           max_speed[2];
     log_func_t          *log;
+    struct http_io_parameters *http_io_params;
 };
 
 /* Initialize function pointers specific to storage */
@@ -318,7 +354,7 @@ void update_hmac_from_header(HMAC_CTX *ctx, struct http_io *io, const char *name
 void http_io_list_elem_start(void *arg, const XML_Char *name, const XML_Char **atts);
 void http_io_list_elem_end(void *arg, const XML_Char *name);
 void http_io_list_text(void *arg, const XML_Char *s, int len);
-
+cb_block_t bit_reverse(cb_block_t block_num);
 
 /* Internal variables */
 u_char zero_md5[MD5_DIGEST_LENGTH];

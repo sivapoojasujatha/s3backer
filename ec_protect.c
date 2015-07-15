@@ -111,7 +111,7 @@ struct cbinfo {
 };
 
 /* cloudbacker_store functions */
-static int ec_protect_meta_data(struct cloudbacker_store *backerstore, off_t *file_sizep, u_int *block_sizep);
+static int ec_protect_meta_data(struct cloudbacker_store *backerstore, off_t *file_sizep, u_int *block_sizep, u_int *name_hashp);
 static int ec_protect_set_mounted(struct cloudbacker_store *backerstore, int *old_valuep, int new_value);
 static int ec_protect_read_block(struct cloudbacker_store *backerstore, cb_block_t block_num, void *dest,
   u_char *actual_md5, const u_char *expect_md5, int strict);
@@ -213,11 +213,11 @@ fail0:
 }
 
 static int
-ec_protect_meta_data(struct cloudbacker_store *backerstore, off_t *file_sizep, u_int *block_sizep)
+ec_protect_meta_data(struct cloudbacker_store *backerstore, off_t *file_sizep, u_int *block_sizep, u_int *name_hashp)
 {
     struct ec_protect_private *const priv = backerstore->data;
 
-    return (*priv->inner->meta_data)(priv->inner, file_sizep, block_sizep);
+    return (*priv->inner->meta_data)(priv->inner, file_sizep, block_sizep, name_hashp);
 }
 
 static int

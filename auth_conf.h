@@ -23,7 +23,11 @@
 #ifndef AUTH_CONF_H
 #define AUTH_CONF_H
 
-/* S3-specific configuration info */
+/*
+==============================================================================
+********  Cloudbacker - Authentication specific configuration info ***********
+==============================================================================
+*/
 
 struct auth_conf {
     union {
@@ -31,17 +35,19 @@ struct auth_conf {
 	    char                *accessId;
 	    char                *accessKey;
 	    char                *iam_token;
-	    const char          *accessType;
+	    char                *accessType;
 	    const char          *ec2iam_role;
-	    const char          *authVersion;
+	    char                *authVersion;
 	} s3;
 	struct {
    	    char		*clientId; 
 	    char		*p12_keyfile_path;
 	    char		*auth_token;
-	    const char          *accessType;
-	} gs;
+	    char                *accessType;
+            char                *authVersion;
+	} gs;        
     } u;
+   
 };
 
 #endif

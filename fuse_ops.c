@@ -24,7 +24,7 @@
 #include "block_cache.h"
 #include "ec_protect.h"
 #include "fuse_ops.h"
-#include "s3b_http_io.h"
+#include "cb_http_io.h"
 #include "cloudbacker_config.h"
 
 /****************************************************************************

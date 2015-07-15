@@ -63,7 +63,12 @@
  * either when they timeout or the cache is full and we need to add a new entry to it.
  */
 
-/* Cache entry states */
+/*
+===========================================================================================
+************************************ Cache entry states ***********************************
+===========================================================================================
+*/
+
 #define CLEAN           0
 #define CLEAN2          1
 #define DIRTY           2
@@ -73,6 +78,7 @@
 #define WRITING2        6
 
 /*
+============================================================================================
  * One cache entry. In order to keep this structure as small as possible, we do
  * two size optimizations:
  *
@@ -100,19 +106,14 @@
  * to wrap after about two years; the effect would be mis-timed writes and evictions.
  *
  * In state CLEAN2 only, the MD5 to verify immediately follows the structure.
+===============================================================================================
  */
-struct cache_entry {
-    cb_block_t                     block_num;      // block number - MUST BE FIRST
-    u_int                           dirty:1;        // indicates state DIRTY or WRITING2
-    u_int                           verify:1;       // data should be verified first
-    uint32_t                        timeout:30;     // when to evict (CLEAN[2]) or write (DIRTY)
-    TAILQ_ENTRY(cache_entry)        link;           // next in list (cleans or dirties)
-    union {
-        void                        *data;          // data buffer in memory
-        u_int                       dslot;          // disk cache data slot
-    }                               u;
-    u_char                          md5[0];         // MD5 checksum (CLEAN2)
-};
+
+/*
+===============================================================================================
+************************************   Macro definitions   ************************************
+===============================================================================================
+*/
 #define ENTRY_IN_LIST(entry)                ((entry)->link.tqe_prev != NULL)
 #define ENTRY_RESET_LINK(entry)             do { (entry)->link.tqe_prev = NULL; } while (0)
 #define ENTRY_GET_STATE(entry)              (ENTRY_IN_LIST(entry) ?                             \
@@ -130,6 +131,25 @@ struct cache_entry {
 
 /* Special timeout value for entries in state READING and READING2 */
 #define READING_TIMEOUT             ((uint32_t)0x3fffffff)
+
+/*
+===============================================================================================
+********************************   Structure definitions   ************************************
+===============================================================================================
+*/
+
+struct cache_entry {
+    cb_block_t                     block_num;      // block number - MUST BE FIRST
+    u_int                           dirty:1;        // indicates state DIRTY or WRITING2
+    u_int                           verify:1;       // data should be verified first
+    uint32_t                        timeout:30;     // when to evict (CLEAN[2]) or write (DIRTY)
+    TAILQ_ENTRY(cache_entry)        link;           // next in list (cleans or dirties)
+    union {
+        void                        *data;          // data buffer in memory
+        u_int                       dslot;          // disk cache data slot
+    }                               u;
+    u_char                          md5[0];         // MD5 checksum (CLEAN2)
+};
 
 /* Private data */
 struct block_cache_private {
@@ -166,8 +186,12 @@ struct cbinfo {
     void                        *arg;
 };
 
-/* cloudbacker_store functions */
-static int block_cache_meta_data(struct cloudbacker_store *backerstore, off_t *file_sizep, u_int *block_sizep);
+/*
+===============================================================================================
+******************************   cloudbacker_store functions  *********************************
+===============================================================================================
+*/
+static int block_cache_meta_data(struct cloudbacker_store *backerstore, off_t *file_sizep, u_int *block_sizep, u_int *name_hashp);
 static int block_cache_set_mounted(struct cloudbacker_store *backerstore, int *old_valuep, int new_value);
 static int block_cache_read_block(struct cloudbacker_store *backerstore, cb_block_t block_num, void *dest,
   u_char *actual_md5, const u_char *expect_md5, int strict);
@@ -179,7 +203,11 @@ static int block_cache_list_blocks(struct cloudbacker_store *backerstore, block_
 static int block_cache_flush(struct cloudbacker_store *backerstore);
 static void block_cache_destroy(struct cloudbacker_store *backerstore);
 
-/* Other functions */
+/*
+===============================================================================================
+*************************************   Other functions  **************************************
+===============================================================================================
+*/
 static cb_dcache_visit_t block_cache_dcache_load;
 static int block_cache_read(struct block_cache_private *priv, cb_block_t block_num, u_int off, u_int len, void *dest);
 static int block_cache_do_read(struct block_cache_private *priv, cb_block_t block_num, u_int off, u_int len, void *dest, int stats);
@@ -209,14 +237,18 @@ static void block_cache_check_one(void *arg, void *value);
 #endif
 
 /*
- * Wrap an underlying s3backer store with a block cache. Invoking the
- * destroy method will destroy both this and the inner s3backer store.
- *
- * Returns NULL and sets errno on failure.
- */
+===============================================================================================
+* Wrap an underlying s3backer store with a block cache. Invoking the
+* destroy method will destroy both this and the inner s3backer store.
+*
+* Returns NULL and sets errno on failure.
+===============================================================================================
+*/
+
 struct cloudbacker_store *
 block_cache_create(struct block_cache_conf *config, struct cloudbacker_store *inner)
 {
+
     struct cloudbacker_store *backerstore;
     struct block_cache_private *priv;
     struct cache_entry *entry;
@@ -333,8 +365,10 @@ fail0:
 }
 
 /*
- * Callback function to pre-load the cache from a pre-existing cache file.
- */
+===============================================================================================
+* Callback function to pre-load the cache from a pre-existing cache file.
+===============================================================================================
+*/
 static int
 block_cache_dcache_load(void *arg, cb_block_t dslot, cb_block_t block_num, const u_char *md5)
 {
@@ -375,11 +409,11 @@ block_cache_dcache_load(void *arg, cb_block_t dslot, cb_block_t block_num, const
 }
 
 static int
-block_cache_meta_data(struct cloudbacker_store *backerstore, off_t *file_sizep, u_int *block_sizep)
+block_cache_meta_data(struct cloudbacker_store *backerstore, off_t *file_sizep, u_int *block_sizep, u_int *name_hashp)
 {
     struct block_cache_private *const priv = backerstore->data;
-
-    return (*priv->inner->meta_data)(priv->inner, file_sizep, block_sizep);
+ 
+    return (*priv->inner->meta_data)(priv->inner, file_sizep, block_sizep, name_hashp);
 }
 
 static int
@@ -496,8 +530,11 @@ block_cache_read_block_part(struct cloudbacker_store *backerstore, cb_block_t bl
 }
 
 /*
- * Read a block, and trigger read-ahead if necessary.
- */
+=============================================================================================================
+* Read a block, and trigger read-ahead if necessary.
+=============================================================================================================
+*/
+
 static int
 block_cache_read(struct block_cache_private *const priv, cb_block_t block_num, u_int off, u_int len, void *dest)
 {
@@ -532,10 +569,12 @@ block_cache_read(struct block_cache_private *const priv, cb_block_t block_num, u
 }
 
 /*
- * Read a block or a portion thereof.
- *
- * Assumes the mutex is held.
- */
+===============================================================================================================
+* Read a block or a portion thereof.
+*
+* Assumes the mutex is held.
+===============================================================================================================
+*/
 static int
 block_cache_do_read(struct block_cache_private *const priv, cb_block_t block_num, u_int off, u_int len, void *dest, int stats)
 {
@@ -729,8 +768,10 @@ block_cache_write_block_part(struct cloudbacker_store *backerstore, cb_block_t b
 }
 
 /*
- * Write a block or a portion thereof.
- */
+===================================================================================================================
+* Write a block or a portion thereof.
+===================================================================================================================
+*/
 static int
 block_cache_write(struct block_cache_private *const priv, cb_block_t block_num, u_int off, u_int len, const void *src)
 {
@@ -878,17 +919,20 @@ fail:
 }
 
 /*
- * Acquire a new cache entry. If the cache is full, and there is at least one
- * CLEAN[2] entry, evict and return it (uninitialized). Otherwise, return NULL entry.
- *
- * On successful return, *datap will point to a malloc'd buffer for the data. If using
- * the disk cache, this will be a temporary buffer, otherwise it's the in-memory buffer.
- * If datap == NULL, then in the case of the disk cache only, no buffer is allocated.
- *
- * This assumes the mutex is held.
- *
- * Returns non-zero on error.
- */
+========================================================================================
+* Acquire a new cache entry. If the cache is full, and there is at least one
+* CLEAN[2] entry, evict and return it (uninitialized). Otherwise, return NULL entry.
+*
+* On successful return, *datap will point to a malloc'd buffer for the data. If using
+* the disk cache, this will be a temporary buffer, otherwise it's the in-memory buffer.
+* If datap == NULL, then in the case of the disk cache only, no buffer is allocated.
+*
+* This assumes the mutex is held.
+*
+* Returns non-zero on error.
+=========================================================================================
+*/
+
 static int
 block_cache_get_entry(struct block_cache_private *priv, struct cache_entry **entryp, void **datap)
 {
@@ -950,8 +994,11 @@ done:
 }
 
 /*
- * Evict a CLEAN[2] entry.
- */
+=========================================================================================
+* Evict a CLEAN[2] entry.
+=========================================================================================
+*/
+
 static void
 block_cache_free_entry(struct block_cache_private *priv, struct cache_entry **entryp)
 {
@@ -984,8 +1031,11 @@ block_cache_free_entry(struct block_cache_private *priv, struct cache_entry **en
 }
 
 /*
- * Worker thread main entry point.
- */
+=========================================================================================
+* Worker thread main entry point.
+=========================================================================================
+*/
+
 static void *
 block_cache_worker_main(void *arg)
 {
@@ -1137,8 +1187,11 @@ done:
 }
 
 /*
- * See if we want to cancel the current write for the given block.
- */
+==========================================================================================
+* See if we want to cancel the current write for the given block.
+==========================================================================================
+*/
+
 static int
 block_cache_check_cancel(void *arg, cb_block_t block_num)
 {
@@ -1167,11 +1220,13 @@ block_cache_check_cancel(void *arg, cb_block_t block_num)
 }
 
 /*
- * Sleep until either the 'worker_work' condition becomes true, or the
- * entry (if any) times out.
- *
- * This assumes the mutex is held.
- */
+====================================================================================
+* Sleep until either the 'worker_work' condition becomes true, or the
+* entry (if any) times out.
+*
+* This assumes the mutex is held.
+====================================================================================
+*/
 static void
 block_cache_worker_wait(struct block_cache_private *priv, struct cache_entry *entry)
 {
@@ -1189,8 +1244,11 @@ block_cache_worker_wait(struct block_cache_private *priv, struct cache_entry *en
 }
 
 /*
- * Return current time in units of TIME_UNIT_MILLIS milliseconds since startup.
- */
+====================================================================================
+* Return current time in units of TIME_UNIT_MILLIS milliseconds since startup.
+====================================================================================
+*/
+
 static uint32_t
 block_cache_get_time(struct block_cache_private *priv)
 {
@@ -1201,8 +1259,11 @@ block_cache_get_time(struct block_cache_private *priv)
 }
 
 /*
- * Return current time in milliseconds.
- */
+====================================================================================
+* Return current time in milliseconds.
+====================================================================================
+*/
+
 static uint64_t
 block_cache_get_time_millis(void)
 {
@@ -1225,8 +1286,11 @@ block_cache_free_one(void *arg, void *value)
 }
 
 /*
- * Mark an entry verified and free the extra bytes we allocated for the MD5 checksum.
- */
+=====================================================================================
+* Mark an entry verified and free the extra bytes we allocated for the MD5 checksum.
+====================================================================================
+*/
+
 static struct cache_entry *
 block_cache_verified(struct block_cache_private *priv, struct cache_entry *entry)
 {
@@ -1255,8 +1319,11 @@ done:
 }
 
 /*
- * Read the data from a cached block into a buffer.
- */
+====================================================================================
+* Read the data from a cached block into a buffer.
+====================================================================================
+*/
+
 static int
 block_cache_read_data(struct block_cache_private *priv, struct cache_entry *entry, void *dest, u_int off, u_int len)
 {
@@ -1278,8 +1345,11 @@ block_cache_read_data(struct block_cache_private *priv, struct cache_entry *entr
 }
 
 /*
- * Write the data in a buffer to a cached block.
- */
+====================================================================================
+* Write the data in a buffer to a cached block.
+====================================================================================
+*/
+
 static int
 block_cache_write_data(struct block_cache_private *priv, struct cache_entry *entry, const void *src, u_int off, u_int len)
 {
@@ -1304,9 +1374,12 @@ block_cache_write_data(struct block_cache_private *priv, struct cache_entry *ent
 }
 
 /*
- * Compute dirty ratio, i.e., percent of total cache space occupied by entries
- * that are not CLEAN[2] or READING[2].
- */
+====================================================================================
+* Compute dirty ratio, i.e., percent of total cache space occupied by entries
+* that are not CLEAN[2] or READING[2].
+====================================================================================
+*/
+
 static double
 block_cache_dirty_ratio(struct block_cache_private *priv)
 {
@@ -1340,7 +1413,12 @@ block_cache_dirty_callback(void *arg, void *value)
 
 #ifndef NDEBUG
 
-/* Accounting structure */
+/*
+====================================================================================
+***************************** Accounting structure *********************************
+====================================================================================
+*/
+
 struct check_info {
     u_int   num_clean;
     u_int   num_dirty;

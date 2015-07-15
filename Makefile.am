@@ -32,8 +32,7 @@ noinst_HEADERS=         cloudbacker.h \
 			erase.h \
 			fuse_ops.h \
 			hash.h \
-			gsb_http_io.h \
-			s3b_http_io.h \
+			cb_http_io.h \
 			reset.h \
 			test_io.h \
 			cloudbacker_config.h \
@@ -48,7 +47,7 @@ doc_DATA=           CHANGES COPYING README INSTALL TODO
 
 EXTRA_DIST=         CHANGES cloudbacker.1 cloudbacker.spec
 
-cloudbacker_SOURCES=   main.c \
+cloudbacker_SOURCES=main.c \
 		    block_cache.c \
 		    block_part.c \
 		    dcache.c \
@@ -56,8 +55,7 @@ cloudbacker_SOURCES=   main.c \
 		    erase.c \
 		    fuse_ops.c \
 		    hash.c \
-                    gsb_http_io.c \
-		    s3b_http_io.c \
+                    cb_http_io.c \
 		    reset.c \
 		    cloudbacker_config.c \
 		    test_io.c \
@@ -65,21 +63,21 @@ cloudbacker_SOURCES=   main.c \
 		    http_gio.c
 
 tester_SOURCES=     tester.c \
-		    block_cache.c \
-		    block_part.c \
-		    dcache.c \
-		    ec_protect.c \
-		    erase.c \
-		    hash.c \
-		    gsb_http_io.c \
-		    s3b_http_io.c \
-		    reset.c \
-		    cloudbacker_config.c \
-		    test_io.c \
-		    gitrev.c \
-		    http_gio.c
+		   block_cache.c \
+                   block_part.c \
+                   dcache.c \
+                   ec_protect.c \
+                   erase.c \
+                   hash.c \
+                   cb_http_io.c \
+                   reset.c \
+                   cloudbacker_config.c \
+                   test_io.c \
+                   gitrev.c \
+                   http_gio.c
 
-AM_CFLAGS=          $(FUSE_CFLAGS)
+TEST_FLAG=         -DRUN_TESTS
+AM_CFLAGS=         -I/home/build/local/include $(FUSE_CFLAGS) -L/home/build/local/lib -lcunit
 
 SUBDIRS=            debian
 

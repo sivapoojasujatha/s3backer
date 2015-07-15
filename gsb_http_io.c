@@ -604,7 +604,11 @@ gsb_http_io_list_blocks(struct cloudbacker_store *backerstore, block_list_func_t
     }
 
     /* List blocks */
+//    do {
+     int cnt = 0;
     do {
+       printf("\n gsb_http :: entering do cnt = %d", cnt);
+
         const time_t now = time(NULL);
 
         /* Reset XML parser state */
@@ -614,16 +618,25 @@ gsb_http_io_list_blocks(struct cloudbacker_store *backerstore, block_list_func_t
         XML_SetCharacterDataHandler(io.xml, http_io_list_text);
 
         /* Format URL */
-        snprintf(urlbuf, sizeof(urlbuf), "%s%s?", config->baseURL, config->vhost ? "" : config->bucket);
+        snprintf(urlbuf, sizeof(urlbuf), "%s%s/?", config->baseURL, config->vhost ? "" : config->bucket);
+       // snprintf(urlbuf, sizeof(urlbuf), "%s.%s?",config->bucket,config->baseURL);
 
+//       gsb_http_io_get_block_url(urlbuf, sizeof(urlbuf), config, 0);
         /* Add URL parameters (note: must be in "canonical query string" format for proper authentication) */
-        if (io.list_truncated) {
+        /*if (io.list_truncated) {
             snprintf(urlbuf + strlen(urlbuf), sizeof(urlbuf) - strlen(urlbuf), "%s=%s%0*jx&",
               LIST_PARAM_MARKER, config->prefix, CLOUDBACKER_BLOCK_NUM_DIGITS, (uintmax_t)io.last_block);
-        }
+        }*/
+       // memset(urlbuf,0, sizeof(urlbuf));
+        //snprintf(urlbuf,sizeof(urlbuf), "%s.%s/%s",  config->bucket,GS_DOMAIN, config->prefix);
+        printf("\n io.list_truncated = %d", io.list_truncated);
+	/*if (io.list_truncated) {
+           snprintf(urlbuf + strlen(urlbuf), sizeof(urlbuf) - strlen(urlbuf), "?%s=%s%0*jx&",
+              LIST_PARAM_MARKER, config->prefix, CLOUDBACKER_BLOCK_NUM_DIGITS, (uintmax_t)io.last_block);
+         }*/  
         snprintf(urlbuf + strlen(urlbuf), sizeof(urlbuf) - strlen(urlbuf), "%s=%u", LIST_PARAM_MAX_KEYS, LIST_BLOCKS_CHUNK);
         snprintf(urlbuf + strlen(urlbuf), sizeof(urlbuf) - strlen(urlbuf), "&%s=%s", LIST_PARAM_PREFIX, config->prefix);
-
+        printf("\n urlbuf = %s", urlbuf); 
         /* Add Date header */
         gsb_http_io_add_date(priv, &io, now);
 
@@ -656,6 +669,8 @@ gsb_http_io_list_blocks(struct cloudbacker_store *backerstore, block_list_func_t
             r = EIO;
             goto fail;
         }
+      cnt++;
+    // io.list_truncated = 0;
     } while (io.list_truncated);
 
     /* Done */

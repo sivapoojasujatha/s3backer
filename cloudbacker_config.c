@@ -24,9 +24,25 @@
 #include "block_cache.h"
 #include "ec_protect.h"
 #include "fuse_ops.h"
-#include "s3b_http_io.h"
+#include "cb_http_io.h"
 #include "test_io.h"
 #include "cloudbacker_config.h"
+
+#if RUN_TESTS
+#include "CUnit/CUnit.h"
+#include "CUnit/Basic.h"
+
+void cloudbacker_get_config_test(void);
+void cloudbacker_create_store_test(void);
+void cb_config_print_stats_test(void);
+void parse_size_string_test(void);
+void unparse_size_string_test(void);
+void handle_unknown_option_test(void);
+void search_access_for_test(void);
+void validate_config_test(void);
+void list_blocks_callback_test(void);
+void read_credentials_test(void);
+#endif
 
 #define S3_BUCKET_PREFIX  			   "s3://"        // Amazon bucket s3://mybucket
 #define GS_BUCKET_PREFIX			   "gs://"        // Google cloud storage bucket gs://mybucket
@@ -57,6 +73,7 @@
 #define GS_ACCESS_BUCKET_OWNER_READ		    "bucket-owner-read"
 #define GS_ACCESS_BUCKET_OWNER_FULL_CONTROL	    "bucket-owner-full-control"
 
+#define GSBACKER_DEFAULT_AUTH_VERSION               AUTH_VERSION_OAUTH2
 
 /* Default values for some configuration parameters */
 
@@ -123,7 +140,10 @@ static int handle_unknown_option(void *data, const char *arg, int key, struct fu
 static void syslog_logger(int level, const char *fmt, ...) __attribute__ ((__format__ (__printf__, 2, 3)));
 static void stderr_logger(int level, const char *fmt, ...) __attribute__ ((__format__ (__printf__, 2, 3)));
 static int validate_config(void);
-static int read_credentials(void /*struct http_io_conf http_io*/);
+static int read_credentials(void);
+static int check_authVersion(void);
+static int check_accessType(void);
+static int check_storageClass(void);
 static void list_blocks_callback(void *arg, cb_block_t block_num);
 static void dump_config(void);
 static void usage(void);
@@ -155,6 +175,12 @@ static const char *const gs_acls[] = {
 };
 
 
+/* Valid GS authentication types */
+static const char *const gs_auth_types[] = {
+    AUTH_VERSION_AWS2,
+    AUTH_VERSION_OAUTH2,
+};
+
 /* Valid S3 authentication types */
 static const char *const s3_auth_types[] = {
     AUTH_VERSION_AWS2,
@@ -167,27 +193,33 @@ static struct cloudbacker_config config = {
 
     /* HTTP config */
     .http_io= {
+        .accessType=                    NULL,
+        .authVersion=                   NULL,
         .baseURL=               	NULL,
         .region=                	NULL,
         .bucket=                	NULL,
+        .storageClass=			SCLASS_STANDARD,
         .prefix=                	CLOUDBACKER_DEFAULT_PREFIX,
+        .name_hash=	                0,       
         .user_agent=            	user_agent_buf,
         .compress=              	CLOUDBACKER_DEFAULT_COMPRESSION,
         .timeout=               	CLOUDBACKER_DEFAULT_TIMEOUT,
         .initial_retry_pause=   	CLOUDBACKER_DEFAULT_INITIAL_RETRY_PAUSE,
         .max_retry_pause=       	CLOUDBACKER_DEFAULT_MAX_RETRY_PAUSE,
         .http_s3b= {
-    	    .auth.u.s3.accessId=            NULL,
-            .auth.u.s3.accessKey=           NULL,
-	    .auth.u.s3.accessType=          S3BACKER_DEFAULT_ACCESS_TYPE,
-	    .auth.u.s3.authVersion=         S3BACKER_DEFAULT_AUTH_VERSION,
+    	    .auth.u.s3.accessId=             NULL,
+            .auth.u.s3.accessKey=            NULL,
+	    .auth.u.s3.accessType=           NULL, /*S3BACKER_DEFAULT_ACCESS_TYPE,*/
+	    .auth.u.s3.authVersion=          NULL, /*S3BACKER_DEFAULT_AUTH_VERSION,*/
 	},
     	.http_gsb= {
             .auth.u.gs.clientId= 	      NULL,
 	    .auth.u.gs.p12_keyfile_path=      NULL,
 	    .auth.u.gs.auth_token=            NULL,
-            .auth.u.gs.accessType=            GSBACKER_DEFAULT_ACCESS_TYPE,
+            .auth.u.gs.accessType=            NULL, /*GSBACKER_DEFAULT_ACCESS_TYPE,*/
+            .auth.u.gs.authVersion=           NULL, /*GSBACKER_DEFAULT_AUTH_VERSION,*/
    	 },
+         
     },
     /* "Eventual consistency" protection config */
     .ec_protect= {
@@ -245,7 +277,7 @@ static const struct fuse_opt option_list[] = {
     },
     {
         .templ=     "--accessType=%s",
-        .offset=    offsetof(cloudbacker_config, http_io.http_s3b.auth.u.s3.accessType),
+        .offset=    offsetof(cloudbacker_config, http_io.accessType),
     },
     {
         .templ=     "--accessEC2IAM=%s",
@@ -253,7 +285,7 @@ static const struct fuse_opt option_list[] = {
     },
     {
         .templ=     "--authVersion=%s",
-        .offset=    offsetof(cloudbacker_config, http_io.http_s3b.auth.u.s3.authVersion),
+        .offset=    offsetof(cloudbacker_config, http_io.authVersion),
     },
     {
         .templ=     "--listBlocks",
@@ -395,6 +427,11 @@ static const struct fuse_opt option_list[] = {
         .offset=    offsetof(cloudbacker_config, http_io.prefix),
     },
     {
+        .templ=     "--nameHash",
+        .offset=    offsetof(cloudbacker_config, http_io.name_hash),
+        .value=     1
+    },
+    {
         .templ=     "--readOnly",
         .offset=    offsetof(cloudbacker_config, fuse_ops.read_only),
         .value=     1
@@ -411,6 +448,10 @@ static const struct fuse_opt option_list[] = {
         .templ=     "--rrs",
         .offset=    offsetof(cloudbacker_config, http_io.rrs),
         .value=     1
+    },
+    {
+        .templ=     "--storageClass=%s",
+        .offset=    offsetof(cloudbacker_config, http_io.storageClass),        
     },
     {
         .templ=     "--ssl",
@@ -478,7 +519,7 @@ static const char *const cloudbacker_fuse_defaults[] = {
     "-oallow_other",
     "-ouse_ino",
     "-omax_readahead=0",
-    "-osubtype=s3backer",
+    "-osubtype=cloudbacker",
     "-oentry_timeout=31536000",
     "-onegative_timeout=31536000",
     "-oattr_timeout=0",             // because statistics file length changes
@@ -542,10 +583,32 @@ struct cloudbacker_store *test_io_store;
 /****************************************************************************
  *                      PUBLIC FUNCTION DEFINITIONS                         *
  ****************************************************************************/
+#if RUN_TESTS
+int Test_Init(void);
+int test_argc = 0;
+char **test_argv;
+
+void Run_Tests(void){
+/* test_argc = argc;
+    test_argv = (char**) calloc(argc, sizeof(char*));
+    int idx =0;
+    for ( idx = 0; idx < argc; idx++) {
+        test_argv[idx] = argv[idx];
+       printf("\n test_argv[idx] = %s", test_argv[idx]);
+    }*/
+
+    cloudbacker_config_Test_Init();
+   // return NULL;
+
+   /* if( (r = Test_Init()) != 0)
+        return NULL;*/
+
+}
+#endif
 
 cloudbacker_config *
 cloudbacker_get_config(int argc, char **argv)
-{
+{  
     const int num_options = sizeof(option_list) / sizeof(*option_list);
     struct fuse_opt dup_option_list[2 * sizeof(option_list) + 1];
     char buf[1024];
@@ -862,7 +925,6 @@ handle_unknown_option(void *data, const char *arg, int key, struct fuse_args *ou
             usage();
             exit(0);
         }
-
         /* Unknown; pass it through to fuse_main() */
         return 1;
     }
@@ -925,7 +987,7 @@ validate_config(void)
     const int customBaseURL = config.http_io.baseURL != NULL;
     const int customRegion = config.http_io.region != NULL;
     off_t auto_file_size;
-    u_int auto_block_size;
+    u_int auto_block_size, auto_name_hash;
     uintmax_t value;
     const char *s;
     char blockSizeBuf[64];
@@ -978,12 +1040,11 @@ validate_config(void)
     }
 
     /* Read credentials from accessFile or through command line arguments accessId and accesskey */
-   if( read_credentials() != 0){
+    if( read_credentials() != 0){
        warnx("incorrect credentials");
        return -1;
-   }
-
-    /* Set default or custom region */
+    }
+    
     if (config.http_io.region == NULL)
         config.http_io.region = CLOUDBACKER_DEFAULT_REGION;
     if (customRegion)
@@ -1046,28 +1107,25 @@ validate_config(void)
         config.http_io.baseURL = buf;
     }
 
-    /* Check S3 access privilege */
-    if(config.http_io.storage_prefix == S3_STORAGE){
-	for (i = 0; i < sizeof(s3_acls) / sizeof(*s3_acls); i++) {
-             if (strcmp(config.http_io.http_s3b.auth.u.s3.accessType, s3_acls[i]) == 0)
-             	break;
-    	}
-        if (i == sizeof(s3_acls) / sizeof(*s3_acls)) {
-             warnx("illegal access type `%s'", config.http_io.http_s3b.auth.u.s3.accessType);
-             return -1;
-        }
-    }
-    else if(config.http_io.storage_prefix == GS_STORAGE){
-        for (i = 0; i < sizeof(gs_acls) / sizeof(*gs_acls); i++) {
-             if (strcmp(config.http_io.http_gsb.auth.u.gs.accessType, gs_acls[i]) == 0)
-                break;
-        }
-        if (i == sizeof(gs_acls) / sizeof(*gs_acls)) {
-             warnx("illegal access type `%s'", config.http_io.http_gsb.auth.u.gs.accessType);
-             return -1;
-        }
+     /* Check S3 access privilege */
+    if( check_storageClass() != 0)
+    {
+       warnx(" Invalid storageClass ");
+       return -1;
     }
 
+    if(check_authVersion() != 0)
+    {
+      warnx(" Valid authentication for Google - aws2 or oauth2 and for Amazon S3 - aws2 and aws4 ");
+      return -1;
+    }
+
+    /* Check S3 access privilege */
+   if( check_accessType() != 0)
+   {
+      warnx(" Invalid accessType ");
+      return -1;
+   } 
 
     /* Check filenames */
     if (strchr(config.fuse_ops.filename, '/') != NULL || *config.fuse_ops.filename == '\0') {
@@ -1280,8 +1338,8 @@ validate_config(void)
         if ((backerstore = http_io_create(&config.http_io)) == NULL)
             err(1, "http_io_create");
         if (!config.quiet)
-            warnx("auto-detecting block size and total file size...");
-        r = (*backerstore->meta_data)(backerstore, &auto_file_size, &auto_block_size);
+            warnx("auto-detecting block size, total file size, and name hashing setting...");
+        r = (*backerstore->meta_data)(backerstore, &auto_file_size, &auto_block_size, &auto_name_hash);
         (*backerstore->destroy)(backerstore);
     }
 
@@ -1291,7 +1349,8 @@ validate_config(void)
         unparse_size_string(blockSizeBuf, sizeof(blockSizeBuf), (uintmax_t)auto_block_size);
         unparse_size_string(fileSizeBuf, sizeof(fileSizeBuf), (uintmax_t)auto_file_size);
         if (!config.quiet)
-            warnx("auto-detected block size=%s and total size=%s", blockSizeBuf, fileSizeBuf);
+	   warnx("auto-detected block size=%s, total size=%s, name hashing='%s'",
+		  blockSizeBuf, fileSizeBuf, auto_name_hash ? "yes" : "no");
         if (config.block_size == 0)
             config.block_size = auto_block_size;
         else if (auto_block_size != config.block_size) {
@@ -1307,20 +1366,23 @@ validate_config(void)
             } else
                 errx(1, "error: configured block size %s != filesystem block size %s", buf, blockSizeBuf);
         }
-        if (config.file_size == 0)
-            config.file_size = auto_file_size;
-        else if (auto_file_size != config.file_size) {
-            char buf[64];
+	if (config.http_io.name_hash == 0)
+            config.http_io.name_hash = auto_name_hash;
+        else if (auto_name_hash != config.http_io.name_hash) {
 
-            unparse_size_string(buf, sizeof(buf), (uintmax_t)config.file_size);
             if (config.force) {
                 if (!config.quiet) {
-                    warnx("warning: configured file size %s != filesystem file size %s,\n"
-                      "but you said `--force' so I'll proceed anyway even though your data will\n"
-                      "probably not read back correctly.", buf, fileSizeBuf);
+                    warnx("warning: configured name hashing setting '%s' != filesystem name hashing "
+			  "setting '%s',\nbut you said `--force' so I'll proceed anyway even though "
+			  "your object names will probably not be interpreted correctly.",
+			  config.http_io.name_hash ? "yes" : "no",
+			  auto_name_hash ? "yes" : "no");
                 }
             } else
-                errx(1, "error: configured file size %s != filesystem file size %s", buf, fileSizeBuf);
+                errx(1, "error: configured name hashing setting '%s' != filesystem name hashing setting '%s'",
+		     config.http_io.name_hash ? "yes" : "no",
+		     auto_name_hash ? "yes" : "no");
+
         }
         break;
     case ENOENT:
@@ -1335,8 +1397,9 @@ validate_config(void)
         unparse_size_string(blockSizeBuf, sizeof(blockSizeBuf), (uintmax_t)config.block_size);
         unparse_size_string(fileSizeBuf, sizeof(fileSizeBuf), (uintmax_t)config.file_size);
         if (!config.quiet) {
-            warnx("auto-detection %s; using %s block size %s and file size %s", why,
-              config_block_size == 0 ? "default" : "configured", blockSizeBuf, fileSizeBuf);
+	    warnx("auto-detection %s; using %s block size %s, file size %s, name hashing setting '%s'", why,
+		  config_block_size == 0 ? "default" : "configured", blockSizeBuf, fileSizeBuf,
+		  config.http_io.name_hash ? "yes" : "no");	
         }
         break;
     }
@@ -1469,7 +1532,7 @@ validate_config(void)
 
         /* Logging */
         if (!config.quiet) {
-            fprintf(stderr, "s3backer: listing non-zero blocks...");
+            fprintf(stderr, "cloudbacker: listing non-zero blocks...");
             fflush(stderr);
         }
 
@@ -1533,9 +1596,9 @@ static int
 read_credentials(void /*struct http_io_conf http_io*/)
 {
     const int customBaseURL = config.http_io.baseURL != NULL;
-    int i;    
 
     if(config.http_io.storage_prefix == S3_STORAGE){
+    //if((strcasecmp(config.http_io.authVersion, AUTH_VERSION_AWS2) == 0)|| (strcasecmp(config.http_io.authVersion, AUTH_VERSION_AWS4)==0)){
     
         /* Default to $HOME/.s3backer for accessFile */
     	if (config.http_io.http_s3b.auth.u.s3.ec2iam_role == NULL && config.accessFile == NULL) {
@@ -1587,16 +1650,8 @@ read_credentials(void /*struct http_io_conf http_io*/)
             return -1;
         }
 
-        /* Check auth version */
-        for (i = 0; i < sizeof(s3_auth_types) / sizeof(*s3_auth_types); i++) {
-            if (strcmp(config.http_io.http_s3b.auth.u.s3.authVersion, s3_auth_types[i]) == 0)
-            break;
-        }
-        if (i == sizeof(s3_auth_types) / sizeof(*s3_auth_types)) {
-            warnx("illegal authentication version `%s'", config.http_io.http_s3b.auth.u.s3.authVersion);
-            return -1;
-        }
     }
+    //else if((strcasecmp(config.http_io.authVersion, AUTH_VERSION_AWS2) == 0)|| (strcasecmp(config.http_io.authVersion, AUTH_VERSION_OAUTH2)==0)){
     else if(config.http_io.storage_prefix == GS_STORAGE){
 	 //warnx("Need to add authentication stuff for GSB");
 	 //return -1;
@@ -1648,12 +1703,113 @@ read_credentials(void /*struct http_io_conf http_io*/)
          if (stat(config.http_io.http_gsb.auth.u.gs.p12_keyfile_path, &sb) == -1) {
             warn("Incorrect path to p12 key file %s", config.http_io.http_gsb.auth.u.gs.p12_keyfile_path);
             return -1;
-         }
-        // warnx("GSB authentication not implmented... goback from here"); 
-        // return -1;
+	}    
     }
     return 0;
 	
+}
+/*
+===============================================================================================
+* For google storage valid authentication versions are oAuth2.0 and AWS2.
+* For amazon s3 storage valid authentication versions are AWS2 and AWS4.
+===============================================================================================
+*/
+
+static int check_authVersion(void){
+
+    int i = 0;
+    char auth_buf[8]; 
+    if(config.http_io.storage_prefix == GS_STORAGE){
+          if(config.http_io.authVersion != NULL){
+	        for (i = 0; i < sizeof(gs_auth_types) / sizeof(*gs_auth_types); i++) {
+        	    if (strcmp(config.http_io.authVersion, gs_auth_types[i]) == 0)
+	            break;
+        	}
+		if (i == sizeof(gs_auth_types) / sizeof(*gs_auth_types)) {
+	            warnx("illegal authentication version `%s'", config.http_io.authVersion);
+        	    return -1;
+		}
+                    
+	        config.http_io.http_gsb.auth.u.gs.authVersion = strdup(config.http_io.authVersion);
+       	 }
+         else{
+        	strcpy(auth_buf, GSBACKER_DEFAULT_AUTH_VERSION);
+        	config.http_io.http_gsb.auth.u.gs.authVersion = strdup(auth_buf);
+ 
+         }
+   }
+   else if(config.http_io.storage_prefix == S3_STORAGE){
+	 if(config.http_io.authVersion != NULL){
+        	for (i = 0; i < sizeof(s3_auth_types) / sizeof(*s3_auth_types); i++) {
+	            if (strcmp(config.http_io.authVersion, s3_auth_types[i]) == 0)
+	            break;
+        	}
+	        if (i == sizeof(s3_auth_types) / sizeof(*s3_auth_types)) {
+        	    warnx("illegal authentication version `%s'", config.http_io.authVersion);
+		    return -1;
+	        }
+                config.http_io.http_s3b.auth.u.s3.authVersion = strdup(config.http_io.authVersion);
+	}
+        else{
+	       strcpy(auth_buf,  S3BACKER_DEFAULT_AUTH_VERSION);
+	       config.http_io.http_s3b.auth.u.s3.authVersion = strdup(auth_buf);
+        } 
+   }  
+
+   return 0;
+}
+
+static int check_accessType(void)
+{
+   char acl_buf[32];
+   int i = 0;
+   if(config.http_io.accessType != NULL){
+        if(config.http_io.storage_prefix == S3_STORAGE){
+          for (i = 0; i < sizeof(s3_acls) / sizeof(*s3_acls); i++) {
+               if (strcmp(config.http_io.accessType, s3_acls[i]) == 0)
+                  break;
+          }
+          if (i == sizeof(s3_acls) / sizeof(*s3_acls)) {
+             warnx("illegal access type `%s'", config.http_io.accessType);
+             return -1;
+          }          
+          config.http_io.http_gsb.auth.u.gs.accessType = strdup(config.http_io.accessType);
+       }
+       else if(config.http_io.storage_prefix == GS_STORAGE){
+          for (i = 0; i < sizeof(gs_acls) / sizeof(*gs_acls); i++) {
+             if (strcmp(config.http_io.accessType, gs_acls[i]) == 0)
+                break;
+          }
+          if (i == sizeof(gs_acls) / sizeof(*gs_acls)) {
+             warnx("illegal access type `%s'", config.http_io.accessType);
+             return -1;
+          }
+          config.http_io.http_gsb.auth.u.gs.accessType = strdup(config.http_io.accessType);
+      }
+   }
+   else{
+       if(config.http_io.storage_prefix == S3_STORAGE){           
+           strcpy(acl_buf, S3BACKER_DEFAULT_ACCESS_TYPE);
+           config.http_io.http_s3b.auth.u.s3.accessType = strdup(acl_buf);
+       }
+       else if(config.http_io.storage_prefix == GS_STORAGE) {          
+          strcpy(acl_buf, GSBACKER_DEFAULT_ACCESS_TYPE);
+          config.http_io.http_gsb.auth.u.gs.accessType = strdup(acl_buf);
+
+       }
+   }
+   return 0;
+}
+
+static int check_storageClass(void)
+{
+  if(config.http_io.storageClass != NULL){
+     if( (config.http_io.rrs) && ( (strcasecmp(config.http_io.storageClass, SCLASS_NEARLINE)==0) ||
+			           (strcasecmp(config.http_io.storageClass, SCLASS_STANDARD)==0)) )
+        return -1;
+  }
+     
+  return 0;  
 }
 
 static void
@@ -1685,10 +1841,16 @@ dump_config(void)
        (*config.log)(LOG_DEBUG, "%24s: \"%s\"", "ec2iam_role", config.http_io.http_s3b.auth.u.s3.ec2iam_role != NULL ? config.http_io.http_s3b.auth.u.s3.ec2iam_role : "");
        (*config.log)(LOG_DEBUG, "%24s: %s", "authVersion", config.http_io.http_s3b.auth.u.s3.authVersion);
     }
+    else if(config.http_io.storage_prefix == GS_STORAGE){
+      // (*config.log)(LOG_DEBUG, "%24s: \"%s\"", "ec2iam_role", config.http_io.http_s3b.auth.u.s3.ec2iam_role != NULL ? config.http_io.http_s3b.auth.u.s3.ec2iam_role : "");
+       (*config.log)(LOG_DEBUG, "%24s: %s", "authVersion", config.http_io.http_gsb.auth.u.gs.authVersion);
+    }
+
     (*config.log)(LOG_DEBUG, "%24s: \"%s\"", "baseURL", config.http_io.baseURL);
     (*config.log)(LOG_DEBUG, "%24s: \"%s\"", "region", config.http_io.region);
     (*config.log)(LOG_DEBUG, "%24s: \"%s\"", config.test ? "testdir" : "bucket", config.http_io.bucket);
     (*config.log)(LOG_DEBUG, "%24s: \"%s\"", "prefix", config.http_io.prefix);
+    (*config.log)(LOG_DEBUG, "%24s: %s", "name hash", config.http_io.name_hash ? "yes" : "no");
     (*config.log)(LOG_DEBUG, "%24s: %s", "list_blocks", config.list_blocks ? "true" : "false");
     (*config.log)(LOG_DEBUG, "%24s: \"%s\"", "mount", config.mount);
     (*config.log)(LOG_DEBUG, "%24s: \"%s\"", "filename", config.fuse_ops.filename);
@@ -1858,6 +2020,7 @@ usage(void)
     fprintf(stderr, "\t--%-27s %s\n", "region=region", "Specify AWS region");
     fprintf(stderr, "\t--%-27s %s\n", "reset-mounted-flag", "Reset `already mounted' flag in the filesystem");
     fprintf(stderr, "\t--%-27s %s\n", "rrs", "Target written blocks for Reduced Redundancy Storage");
+    fprintf(stderr, "\t--%-27s %s\n", "storageClass", "Target written blocks for specified storage class"); 
     fprintf(stderr, "\t--%-27s %s\n", "size=SIZE", "File size (with optional suffix 'K', 'M', 'G', etc.)");
     fprintf(stderr, "\t--%-27s %s\n", "ssl", "Enable SSL");
     fprintf(stderr, "\t--%-27s %s\n", "statsFilename=NAME", "Name of statistics file in filesystem");
@@ -1901,4 +2064,194 @@ usage(void)
     fprintf(stderr, "\t%-29s %s\n", "-d", "Debug mode (implies -f)");
     fprintf(stderr, "\t%-29s %s\n", "-s", "Run in single-threaded mode");
 }
+#if RUN_TESTS
+/*
+//////////////////////////////////////////////////////////////////////////////
+////////////////         Test Functions        //////////////////////////////
+/////////////////////////////////////////////////////////////////////////////
+*/
 
+/* Test Suite setup and cleanup functions: */
+
+int init_suite(void) { return 0; }
+int clean_suite(void) { return 0; }
+
+CU_pSuite  pCloudBacker_Config_Suite  = NULL;
+
+/* Test suite, registry initialization */
+int cloudbacker_config_Test_Init()
+{
+
+  /* initialize the CUnit test registry */
+  if ( CUE_SUCCESS != CU_initialize_registry() )
+      return CU_get_error();
+
+  /* add cloudbacker_config test suite to the registry */
+   pCloudBacker_Config_Suite = CU_add_suite( "cloudbacker_config_test_suite", init_suite, clean_suite );
+   if ( NULL == pCloudBacker_Config_Suite ) {
+      printf("\n Failed to add cloudbacker_config_test_suite to test registry. \n");
+      CU_cleanup_registry();
+      return CU_get_error();
+   }
+
+   if ( (NULL == CU_add_test(pCloudBacker_Config_Suite, "cloudbacker_get_config_test",cloudbacker_get_config_test)) ||
+        (NULL == CU_add_test(pCloudBacker_Config_Suite, "cloudbacker_create_store_test", cloudbacker_create_store_test)) ||
+        (NULL == CU_add_test(pCloudBacker_Config_Suite, "cb_config_print_stats_test",cb_config_print_stats_test)) ||
+        (NULL == CU_add_test(pCloudBacker_Config_Suite, "parse_size_string_test", parse_size_string_test)) ||
+        (NULL == CU_add_test(pCloudBacker_Config_Suite, "unparse_size_string_test",unparse_size_string_test)) ||
+        (NULL == CU_add_test(pCloudBacker_Config_Suite, "handle_unknown_option_test", handle_unknown_option_test)) ||
+        (NULL == CU_add_test(pCloudBacker_Config_Suite, "search_access_for_test",search_access_for_test)) ||
+        (NULL == CU_add_test(pCloudBacker_Config_Suite, "validate_config_test", validate_config_test)) ||
+        (NULL == CU_add_test(pCloudBacker_Config_Suite, "list_blocks_callback_test",list_blocks_callback_test)) ||
+        (NULL == CU_add_test(pCloudBacker_Config_Suite, "read_credentials_test", read_credentials_test))
+      )
+   {
+      CU_cleanup_registry();
+      return CU_get_error();
+   }
+
+   // Run all tests using the basic interface
+   CU_basic_set_mode(CU_BRM_VERBOSE);
+   CU_basic_run_tests();
+   printf("\n");
+   CU_basic_show_failures(CU_get_failure_list());
+   printf("\n\n");
+
+  /* Clean up registry and return */
+   CU_cleanup_registry();
+   return CU_get_error();
+
+}
+
+/* Test functions implementation */
+
+void cloudbacker_get_config_test(void){
+  int test_argc = 6;
+  test_argv = (char**) calloc(test_argc, sizeof(char*));
+
+  test_argv[0] = "./cloudbacker";
+  test_argv[1] = "--accessFile=/home/build/.s3cker_passwd_s3";
+  test_argv[2] = "--size=1M";
+  test_argv[3] = "--blockSize=4k";
+  test_argv[4] = "sujathas3b1";
+  test_argv[5] = "/mnt/newmount/";
+
+  CU_ASSERT_EQUAL( cloudbacker_get_config(test_argc, test_argv), NULL);
+  /*free(test_argv);
+
+  test_argc = 7;
+  test_argv = (char**) calloc(test_argc, sizeof(char*));
+
+  test_argv[0] = "./cloudbacker";
+  test_argv[1] = "--accessFile=/home/build/.s3backer_passwd_gcs";
+  test_argv[2] = "abc-size";
+  test_argv[3] = "--blockSize=4k";
+  test_argv[4] = "s3://sujathas3b1";
+  test_argv[5] = "/mnt/newmount/";
+  test_argv[6] = "xyz";
+
+  CU_ASSERT_EQUAL( cloudbacker_get_config(test_argc, test_argv), NULL);*/
+
+ /*
+  test_argv[0] = "./cloudbacker";
+  test_argv[1] = "--accessFile=/home/build/.s3backer_passwd_s3";
+  test_argv[2] = "--size=1M";
+  test_argv[3] = "--blockSize=4k";
+  test_argv[4] = "s3://sujathas3b1";
+  test_argv[5] = "/mnt/mount/";
+ 
+  CU_ASSERT_EQUAL( cloudbacker_get_config(test_argc, test_argv), NULL);
+*/
+  free(test_argv);
+
+}
+
+void cloudbacker_create_store_test(void){
+}
+
+void cb_config_print_stats_test(void){
+}
+
+void parse_size_string_test(void){
+}
+
+void unparse_size_string_test(void){
+}
+
+void handle_unknown_option_test(void){
+}
+
+void search_access_for_test(void){
+   CU_ASSERT_EQUAL( search_access_for(NULL, NULL, NULL, NULL),0);
+}
+
+void validate_config_test(void){
+
+  strcpy(config.http_io.bucket, "amazons3bucket");
+  CU_ASSERT_EQUAL( validate_config(), -1);
+
+  strcpy(config.http_io.bucket, "/");
+  CU_ASSERT_EQUAL( validate_config(), -1);
+
+  strcpy(config.http_io.bucket, "s3:/");
+  CU_ASSERT_EQUAL( validate_config(), -1);
+ 
+  strcpy(config.http_io.bucket, "s3:/amazons3bucket");
+  CU_ASSERT_EQUAL( validate_config(), -1);
+
+  strcpy(config.http_io.bucket, "gs://gcs_bucket");
+  CU_ASSERT_EQUAL( validate_config(), -1);
+
+  strcpy(config.http_io.bucket, "gs:/gcs_bucket");
+  CU_ASSERT_EQUAL( validate_config(), -1);
+
+  strcpy(config.http_io.bucket, "gs:gcs_bucket");
+  CU_ASSERT_EQUAL( validate_config(), -1);
+
+  strcpy(config.http_io.bucket, "s3://validbucket");
+
+  config.http_io.baseURL = NULL;
+  CU_ASSERT_EQUAL( validate_config(), -1);
+
+  strcpy(config.http_io.bucket, "s3://validbucket");
+  config.http_io.http_s3b.auth.u.s3.ec2iam_role == NULL;
+  CU_ASSERT_EQUAL( validate_config(), -1);
+
+  strcpy(config.http_io.bucket, "s3://validbucket");
+  config.accessFile == NULL;
+  CU_ASSERT_EQUAL( validate_config(), -1);
+
+  strcpy(config.http_io.bucket, "s3://validbucket");
+  config.http_io.http_s3b.auth.u.s3.accessId = NULL;
+  CU_ASSERT_EQUAL( validate_config(), -1);
+
+  strcpy(config.http_io.bucket, "s3://validbucket");
+  config.http_io.http_s3b.auth.u.s3.accessKey = NULL;
+  CU_ASSERT_EQUAL( validate_config(), -1);
+
+  strcpy(config.http_io.bucket, "gs://validbucket");
+
+  config.http_io.http_gsb.auth.u.gs.clientId = NULL;
+  CU_ASSERT_EQUAL( validate_config(), -1);
+ 
+  strcpy(config.http_io.bucket, "s3://validbucket");
+  strcpy(config.http_io.http_gsb.auth.u.gs.clientId,"somedummyclientID");
+  CU_ASSERT_EQUAL( validate_config(), -1);
+
+  strcpy(config.http_io.bucket, "s3://validbucket");
+  strcpy(config.accessFile, "/some/path/file");
+  CU_ASSERT_EQUAL( validate_config(), -1);
+
+  //strcpy(config.http_io.http_gsb.auth.u.gs.p12_keyfile_path, "/root/path/to/key/file");
+  //CU_ASSERT_EQUAL( validate_config(), -1);
+
+
+}
+
+void list_blocks_callback_test(void){
+}
+
+void read_credentials_test(void){
+}
+
+#endif 

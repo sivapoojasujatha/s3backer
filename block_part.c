@@ -24,8 +24,11 @@
 #include "block_part.h"
 
 /*
- * Generic "dumb" implementation of the read_block_part function.
- */
+====================================================================================
+* Generic "dumb" implementation of the read_block_part function.
+====================================================================================
+*/
+
 int
 block_part_read_block_part(struct cloudbacker_store *backerstore, cb_block_t block_num,
     u_int block_size, u_int off, u_int len, void *dest)
@@ -63,8 +66,11 @@ block_part_read_block_part(struct cloudbacker_store *backerstore, cb_block_t blo
 }
 
 /*
- * Generic "dumb" implementation of the write_block_part function.
- */
+====================================================================================
+* Generic "dumb" implementation of the write_block_part function.
+====================================================================================
+*/
+
 int
 block_part_write_block_part(struct cloudbacker_store *backerstore, cb_block_t block_num,
     u_int block_size, u_int off, u_int len, const void *src)

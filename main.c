@@ -24,7 +24,7 @@
 #include "block_cache.h"
 #include "ec_protect.h"
 #include "fuse_ops.h"
-#include "s3b_http_io.h"
+#include "cb_http_io.h"
 #include "cloudbacker_config.h"
 #include "erase.h"
 #include "reset.h"
@@ -36,9 +36,19 @@ main(int argc, char **argv)
     struct cloudbacker_config *config;
 
     /* Get configuration */
+/*
+ #if RUN_TESTS  
+    //if ((config = cloudbacker_get_config(argc, argv)) == NULL)
+      //  return 1;
+   cloudbacker_config_Test_Init();
+   return 0;
+#else
     if ((config = cloudbacker_get_config(argc, argv)) == NULL)
         return 1;
-
+#endif
+*/
+   if ((config = cloudbacker_get_config(argc, argv)) == NULL)
+        return 1;
     /* Handle `--erase' flag */
     if (config->erase) {
         if (cloudbacker_erase(config) != 0)

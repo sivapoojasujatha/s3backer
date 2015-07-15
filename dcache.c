@@ -24,28 +24,35 @@
 #include "dcache.h"
 
 /*
- * This file implements a simple on-disk storage area for cached blocks.
- * The file contains a header, a directory, and a data area. Each directory
- * entry indicates which block is stored in the corresponding "data slot"
- * in the data area and that block's MD5 checksum. Note the MD5 checksum is
- * the checksum of the stored data, which will differ from the actual block
- * data's MD5 if the block was compressed, encrypted, etc. when stored.
- *
- * File format:
- *
- *  [ struct file_header ]
- *  directory entry for data slot #0
- *  directory entry for data slot #1
- *  ...
- *  directory entry for data slot #N-1
- *  padding up to getpagesize()
- *  data slot #0
- *  data slot #1
- *  ...
- *  data slot #N-1
- */
+============================================================================== 
+* This file implements a simple on-disk storage area for cached blocks.
+* The file contains a header, a directory, and a data area. Each directory
+* entry indicates which block is stored in the corresponding "data slot"
+* in the data area and that block's MD5 checksum. Note the MD5 checksum is
+* the checksum of the stored data, which will differ from the actual block
+* data's MD5 if the block was compressed, encrypted, etc. when stored.
+*
+* File format:
+*
+*  [ struct file_header ]
+*  directory entry for data slot #0
+*  directory entry for data slot #1
+*  ...
+*  directory entry for data slot #N-1
+*  padding up to getpagesize()
+*  data slot #0
+*  data slot #1
+*  ...
+*  data slot #N-1
+==============================================================================
+*/
 
-/* Definitions */
+/*
+==============================================================================
+**************************** Definitions *************************************
+==============================================================================
+*/
+
 #define DCACHE_SIGNATURE            0xe496f17b
 #define ROUNDUP2(x, y)              (((x) + (y) - 1) & ~((y) - 1))
 #define DIRECTORY_READ_CHUNK        1024
@@ -53,7 +60,12 @@
 #define DIR_OFFSET(dslot)           ((off_t)sizeof(struct file_header) + (off_t)(dslot) * sizeof(struct dir_entry))
 #define DATA_OFFSET(priv, dslot)    ((off_t)(priv)->data + (off_t)(dslot) * (priv)->block_size)
 
-/* File header */
+/*
+==============================================================================
+****************************  File header ************************************
+==============================================================================
+*/
+
 struct file_header {
     uint32_t                        signature;
     uint32_t                        header_size;
@@ -86,7 +98,12 @@ struct cb_dcache {
     cb_block_t                     *free_list;
 };
 
-/* Internal functions */
+/*
+==============================================================================
+******************** Internal Function prototypes  ***************************
+==============================================================================
+*/
+
 static int cb_dcache_write_entry(struct cb_dcache *priv, u_int dslot, const struct dir_entry *entry);
 #ifndef NDEBUG
 static int cb_dcache_entry_is_empty(struct cb_dcache *priv, u_int dslot);
@@ -104,6 +121,13 @@ static int cb_dcache_write2(struct cb_dcache *priv, int fd, const char *filename
 
 /* Internal variables */
 static const struct dir_entry zero_entry;
+
+
+/*
+==============================================================================
+******************** Internal Function definitions ***************************
+==============================================================================
+*/
 
 /* Public functions */
 
@@ -268,9 +292,11 @@ cb_dcache_size(struct cb_dcache *priv)
 }
 
 /*
+=========================================================================================
  * Allocate a dslot for a block's data. We don't record this block in the directory yet;
  * that is done by cb_dcache_record_block().
- */
+=========================================================================================
+*/
 int
 cb_dcache_alloc_block(struct cb_dcache *priv, u_int *dslotp)
 {
@@ -290,12 +316,14 @@ cb_dcache_alloc_block(struct cb_dcache *priv, u_int *dslotp)
 }
 
 /*
+===========================================================================================
  * Record a block's dslot in the directory. After this function is called, the block will
  * be visible in the directory and picked up after a restart.
  *
  * This should be called AFTER the data for the block has already been written.
  *
  * There MUST NOT be a directory entry for the block.
+===========================================================================================
  */
 int
 cb_dcache_record_block(struct cb_dcache *priv, u_int dslot, cb_block_t block_num, const u_char *md5)
@@ -324,13 +352,16 @@ cb_dcache_record_block(struct cb_dcache *priv, u_int dslot, cb_block_t block_num
 }
 
 /*
+=============================================================================================
  * Erase the directory entry for a dslot. After this function is called, the block will
  * no longer be visible in the directory after a restart.
  *
  * This should be called BEFORE any new data for the block is written.
  *
  * There MUST be a directory entry for the block.
+=============================================================================================
  */
+
 int
 cb_dcache_erase_block(struct cb_dcache *priv, u_int dslot)
 {
@@ -352,10 +383,13 @@ cb_dcache_erase_block(struct cb_dcache *priv, u_int dslot)
 }
 
 /*
+=====================================================================================
  * Free a no-longer used dslot.
  *
  * There MUST NOT be a directory entry for the block.
- */
+=====================================================================================
+*/
+
 int
 cb_dcache_free_block(struct cb_dcache *priv, u_int dslot)
 {
@@ -377,8 +411,11 @@ cb_dcache_free_block(struct cb_dcache *priv, u_int dslot)
 }
 
 /*
+===================================================================================
  * Read data from one dslot.
- */
+===================================================================================
+*/
+
 int
 cb_dcache_read_block(struct cb_dcache *priv, u_int dslot, void *dest, u_int off, u_int len)
 {
@@ -393,8 +430,10 @@ cb_dcache_read_block(struct cb_dcache *priv, u_int dslot, void *dest, u_int off,
 }
 
 /*
+===================================================================================
  * Write data into one dslot.
- */
+=================================================================================== 
+*/
 int
 cb_dcache_write_block(struct cb_dcache *priv, u_int dslot, const void *src, u_int off, u_int len)
 {
@@ -409,8 +448,10 @@ cb_dcache_write_block(struct cb_dcache *priv, u_int dslot, const void *src, u_in
 }
 
 /*
+===================================================================================
  * Synchronize outstanding changes to persistent storage.
- */
+===================================================================================
+*/
 int
 cb_dcache_fsync(struct cb_dcache *priv)
 {
@@ -449,8 +490,10 @@ cb_dcache_read_entry(struct cb_dcache *priv, u_int dslot, struct dir_entry *entr
 #endif
 
 /*
+===================================================================================
  * Write a directory entry.
- */
+===================================================================================
+*/
 static int
 cb_dcache_write_entry(struct cb_dcache *priv, u_int dslot, const struct dir_entry *entry)
 {
@@ -459,9 +502,12 @@ cb_dcache_write_entry(struct cb_dcache *priv, u_int dslot, const struct dir_entr
 }
 
 /*
+===========================================================================================
  * Resize (and compress) an existing cache file. Upon successful return, priv->fd is closed
  * and the cache file must be re-opened.
- */
+===========================================================================================
+*/
+
 static int
 cb_dcache_resize_file(struct cb_dcache *priv, const struct file_header *old_header)
 {
@@ -715,8 +761,11 @@ cb_dcache_init_free_list(struct cb_dcache *priv, cb_dcache_visit_t *visitor, voi
 }
 
 /*
+===================================================================================
  * Push a dslot onto the free list.
- */
+===================================================================================
+*/
+
 static int
 cb_dcache_push(struct cb_dcache *priv, u_int dslot)
 {
@@ -747,8 +796,10 @@ cb_dcache_push(struct cb_dcache *priv, u_int dslot)
 }
 
 /*
+===================================================================================
  * Pop the next dslot off of the free list. There must be one.
- */
+===================================================================================
+*/
 static void
 cb_dcache_pop(struct cb_dcache *priv, u_int *dslotp)
 {

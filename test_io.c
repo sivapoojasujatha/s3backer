@@ -21,7 +21,7 @@
  */
 
 #include "cloudbacker.h"
-#include "s3b_http_io.h"
+#include "cb_http_io.h"
 #include "block_part.h"
 #include "test_io.h"
 
@@ -35,7 +35,7 @@ struct test_io_private {
 };
 
 /* cloudbacker_store functions */
-static int test_io_meta_data(struct cloudbacker_store *backerstore, off_t *file_sizep, u_int *block_sizep);
+static int test_io_meta_data(struct cloudbacker_store *backerstore, off_t *file_sizep, u_int *block_sizep, u_int *name_hashp);
 static int test_io_set_mounted(struct cloudbacker_store *backerstore, int *old_valuep, int new_value);
 static int test_io_read_block(struct cloudbacker_store *backerstore, cb_block_t block_num, void *dest,
   u_char *actual_md5, const u_char *expect_md5, int strict);
@@ -86,7 +86,7 @@ test_io_create(struct http_io_conf *config)
 }
 
 static int
-test_io_meta_data(struct cloudbacker_store *backerstore, off_t *file_sizep, u_int *block_sizep)
+test_io_meta_data(struct cloudbacker_store *backerstore, off_t *file_sizep, u_int *block_sizep, uint *name_hashp)
 {
     return 0;
 }
