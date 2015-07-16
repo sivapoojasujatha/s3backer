@@ -64,7 +64,7 @@ cloudbacker_erase(cloudbacker_config *config)
     /* Double check with user */
     if (!config->force) {
         warnx("`--erase' flag given: erasing all blocks in %s", config->description);
-        fprintf(stderr, "s3backer: is this correct? [y/N] ");
+        fprintf(stderr, "cloudbacker: is this correct? [y/N]");
         *response = '\0';
         if (fgets(response, sizeof(response), stdin) != NULL) {
             while (*response && isspace(response[strlen(response) - 1]))
@@ -98,7 +98,7 @@ cloudbacker_erase(cloudbacker_config *config)
 
     /* Logging */
     if (!config->quiet) {
-        fprintf(stderr, "s3backer: erasing non-zero blocks...");
+        fprintf(stderr, "cloudbacker: erasing non-zero blocks...");
         fflush(stderr);
     }
 

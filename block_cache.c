@@ -154,7 +154,7 @@ struct cache_entry {
 /* Private data */
 struct block_cache_private {
     struct block_cache_conf         *config;        // configuration
-    struct cloudbacker_store           *inner;         // underlying s3backer store
+    struct cloudbacker_store           *inner;         // underlying cloudbacker store
     struct block_cache_stats        stats;          // statistics
     TAILQ_HEAD(, cache_entry)       cleans;         // list of clean blocks (LRU order)
     TAILQ_HEAD(, cache_entry)       dirties;        // list of dirty blocks (write order)

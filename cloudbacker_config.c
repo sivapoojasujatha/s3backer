@@ -193,6 +193,8 @@ static struct cloudbacker_config config = {
 
     /* HTTP config */
     .http_io= {
+        .accessId=			NULL,
+	.accessKey=			NULL,
         .accessType=                    NULL,
         .authVersion=                   NULL,
         .baseURL=               	NULL,
@@ -269,11 +271,11 @@ static const struct fuse_opt option_list[] = {
     },
     {
         .templ=     "--accessId=%s",
-        .offset=    offsetof(cloudbacker_config, http_io.http_s3b.auth.u.s3.accessId),
+        .offset=    offsetof(cloudbacker_config, http_io.accessId),
     },
     {
         .templ=     "--accessKey=%s",
-        .offset=    offsetof(cloudbacker_config, http_io.http_s3b.auth.u.s3.accessKey),
+        .offset=    offsetof(cloudbacker_config, http_io.accessKey),
     },
     {
         .templ=     "--accessType=%s",
@@ -281,7 +283,7 @@ static const struct fuse_opt option_list[] = {
     },
     {
         .templ=     "--accessEC2IAM=%s",
-        .offset=    offsetof(cloudbacker_config, http_io.http_s3b.auth.u.s3.ec2iam_role),
+        .offset=    offsetof(cloudbacker_config, http_io.ec2iam_role),
     },
     {
         .templ=     "--authVersion=%s",
@@ -715,7 +717,7 @@ cloudbacker_create_store(struct cloudbacker_config *conf)
     }
     if (mounted) {
         if (!conf->force) {
-            (*conf->log)(LOG_ERR, "%s appears to be mounted by another s3backer process", config.description);
+            (*conf->log)(LOG_ERR, "%s appears to be mounted by another cloudbacker process", config.description);
             r = EBUSY;
             goto fail;
         }
@@ -1110,21 +1112,18 @@ validate_config(void)
      /* Check S3 access privilege */
     if( check_storageClass() != 0)
     {
-       warnx(" Invalid storageClass ");
        return -1;
     }
 
     if(check_authVersion() != 0)
     {
-      warnx(" Valid authentication for Google - aws2 or oauth2 and for Amazon S3 - aws2 and aws4 ");
-      return -1;
+       return -1;
     }
 
     /* Check S3 access privilege */
    if( check_accessType() != 0)
    {
-      warnx(" Invalid accessType ");
-      return -1;
+       return -1;
    } 
 
     /* Check filenames */
@@ -1586,7 +1585,8 @@ list_blocks_callback(void *arg, cb_block_t block_num)
 /* 
 Function to read credentials from accessFile or command line arguments accessId and accesskey
 
-For s3backer accessFile format
+cloudbacker accessFile format
+For s3: accessFile format
 <accessId>:<secret oraccesskey>
 
 For GCS: accessFile format
@@ -1597,117 +1597,78 @@ read_credentials(void /*struct http_io_conf http_io*/)
 {
     const int customBaseURL = config.http_io.baseURL != NULL;
 
-    if(config.http_io.storage_prefix == S3_STORAGE){
-    //if((strcasecmp(config.http_io.authVersion, AUTH_VERSION_AWS2) == 0)|| (strcasecmp(config.http_io.authVersion, AUTH_VERSION_AWS4)==0)){
-    
-        /* Default to $HOME/.s3backer for accessFile */
-    	if (config.http_io.http_s3b.auth.u.s3.ec2iam_role == NULL && config.accessFile == NULL) {
-        	const char *home = getenv("HOME");
-	        char buf[PATH_MAX];
-	
-        	if (home != NULL) {
-	            snprintf(buf, sizeof(buf), "%s/%s", home, CLOUDBACKER_DEFAULT_PWD_FILE);
-        	    if ((config.accessFile = strdup(buf)) == NULL)
-	                err(1, "strdup");
-        	}
-	}
+    /* Default to $HOME/.s3backer for accessFile */
+    if (config.http_io.ec2iam_role == NULL && config.accessFile == NULL) {
+       	const char *home = getenv("HOME");
+        char buf[PATH_MAX];
 
-	/* Auto-set file mode in read_only if not explicitly set */
-	if (config.fuse_ops.file_mode == -1) {
-            config.fuse_ops.file_mode = config.fuse_ops.read_only ?
-            CLOUDBACKER_DEFAULT_FILE_MODE_READ_ONLY : CLOUDBACKER_DEFAULT_FILE_MODE;
-        }
-
-    	/* If no accessId specified, default to first in accessFile */
-	if (config.http_io.http_s3b.auth.u.s3.accessId == NULL && config.accessFile != NULL)
-            search_access_for(config.accessFile, NULL, &config.http_io.http_s3b.auth.u.s3.accessId, NULL);
-	if (config.http_io.http_s3b.auth.u.s3.accessId != NULL && *config.http_io.http_s3b.auth.u.s3.accessId == '\0')
-            config.http_io.http_s3b.auth.u.s3.accessId = NULL;
-
-        /* If no accessId, only read operations will succeed */
-        if (config.http_io.http_s3b.auth.u.s3.accessId == NULL && !config.fuse_ops.read_only && !customBaseURL && config.http_io.http_s3b.auth.u.s3.ec2iam_role == NULL) {
-             warnx("warning: no `accessId' specified; only read operations will succeed");
-             warnx("you can eliminate this warning by providing the `--readOnly' flag");
-        }
-
-        /* Find key in file if not specified explicitly */
-        if (config.http_io.http_s3b.auth.u.s3.accessId == NULL && config.http_io.http_s3b.auth.u.s3.accessKey != NULL) {
-             warnx("an `accessKey' was specified but no `accessId' was specified");
-             return -1;
-        }
-        if (config.http_io.http_s3b.auth.u.s3.accessId != NULL) {
-            if (config.http_io.http_s3b.auth.u.s3.accessKey == NULL && config.accessFile != NULL)
-                 search_access_for(config.accessFile, config.http_io.http_s3b.auth.u.s3.accessId, NULL, &config.http_io.http_s3b.auth.u.s3.accessKey);
-            if (config.http_io.http_s3b.auth.u.s3.accessKey == NULL) {
-                 warnx("no `accessKey' specified");
-                 return -1;
-            }
-        }
-
-        /* Check for conflict between explicit accessId and EC2 IAM role */
-        if (config.http_io.http_s3b.auth.u.s3.accessId != NULL && config.http_io.http_s3b.auth.u.s3.ec2iam_role != NULL) {
-            warnx("an `accessKey' must not be specified when an `accessEC2IAM' role is specified");
-            return -1;
-        }
-
-    }
-    //else if((strcasecmp(config.http_io.authVersion, AUTH_VERSION_AWS2) == 0)|| (strcasecmp(config.http_io.authVersion, AUTH_VERSION_OAUTH2)==0)){
-    else if(config.http_io.storage_prefix == GS_STORAGE){
-	 //warnx("Need to add authentication stuff for GSB");
-	 //return -1;
-         /* Default to $HOME/.s3backer for accessFile */
-         if (config.accessFile == NULL) {
-         const char *home = getenv("HOME");
-         char buf[PATH_MAX];
-
-         if (home != NULL) {
+       	if (home != NULL) {
             snprintf(buf, sizeof(buf), "%s/%s", home, CLOUDBACKER_DEFAULT_PWD_FILE);
-            if ((config.accessFile = strdup(buf)) == NULL)
+       	    if ((config.accessFile = strdup(buf)) == NULL)
                 err(1, "strdup");
-            }
-         }
+	    }
+    }
 
-         /* Auto-set file mode in read_only if not explicitly set */
-         if (config.fuse_ops.file_mode == -1) {
-             config.fuse_ops.file_mode = config.fuse_ops.read_only ?
-             CLOUDBACKER_DEFAULT_FILE_MODE_READ_ONLY : CLOUDBACKER_DEFAULT_FILE_MODE;
-         }
+    /* Auto-set file mode in read_only if not explicitly set */
+    if (config.fuse_ops.file_mode == -1) {
+           config.fuse_ops.file_mode = config.fuse_ops.read_only ?
+           CLOUDBACKER_DEFAULT_FILE_MODE_READ_ONLY : CLOUDBACKER_DEFAULT_FILE_MODE;
+    }
 
-         /* If no accessId specified, default to first in accessFile */
-         if (config.http_io.http_gsb.auth.u.gs.clientId == NULL && config.accessFile != NULL)
-             search_access_for(config.accessFile, NULL, &config.http_io.http_gsb.auth.u.gs.clientId, NULL);
-         if (config.http_io.http_gsb.auth.u.gs.clientId != NULL && *config.http_io.http_gsb.auth.u.gs.clientId == '\0')
-             config.http_io.http_gsb.auth.u.gs.clientId = NULL;
+    /* If no accessId specified, default to first in accessFile */
+    if (config.http_io.accessId == NULL && config.accessFile != NULL)
+          search_access_for(config.accessFile, NULL, &config.http_io.accessId, NULL);
+    if (config.http_io.accessId != NULL && *config.http_io.accessId == '\0')
+          config.http_io.accessId = NULL;
 
-         /* If no accessId, only read operations will succeed */
-         if (config.http_io.http_gsb.auth.u.gs.clientId == NULL && !config.fuse_ops.read_only && !customBaseURL ) {
-            warnx("warning: no `clientId' specified; only read operations will succeed");
-            warnx("you can eliminate this warning by providing the `--readOnly' flag");
-         }
+    /* If no accessId, only read operations will succeed */
+    if (config.http_io.accessId == NULL && !config.fuse_ops.read_only && !customBaseURL && 
+         (config.http_io.ec2iam_role == NULL && config.http_io.storage_prefix == S3_STORAGE)) {
+         warnx("warning: no `accessId' specified; only read operations will succeed");
+         warnx("you can eliminate this warning by providing the `--readOnly' flag");
+    }
 
-         /* Find key in file if not specified explicitly */
-         if (config.http_io.http_gsb.auth.u.gs.clientId == NULL && config.http_io.http_gsb.auth.u.gs.p12_keyfile_path != NULL) {
-             warnx("a p12 key path was specified but no `clientId' was specified");
-             return -1;
-         }
-         if (config.http_io.http_gsb.auth.u.gs.clientId != NULL) {
-         if (config.http_io.http_gsb.auth.u.gs.p12_keyfile_path == NULL && config.accessFile != NULL)
-            search_access_for(config.accessFile, config.http_io.http_gsb.auth.u.gs.clientId, NULL, &config.http_io.http_gsb.auth.u.gs.p12_keyfile_path);
-            if (config.http_io.http_gsb.auth.u.gs.p12_keyfile_path== NULL) {
-                warnx("no `p12 Key' specified");
-                return -1;
-            }
-         }
+    /* Find key in file if not specified explicitly */
+    if (config.http_io.accessId == NULL && config.http_io.accessKey != NULL) {
+         warnx("an `accessKey' was specified but no `accessId' was specified");
+         return -1;
+    }
+    if (config.http_io.accessId != NULL) {
+         if (config.http_io.accessKey == NULL && config.accessFile != NULL)
+              search_access_for(config.accessFile, config.http_io.accessId, NULL, &config.http_io.accessKey);
+         if (config.http_io.accessKey == NULL) {
+              warnx("no `accessKey' specified");
+              return -1;
+        }
+    }
 
+    /* Check for conflict between explicit accessId and EC2 IAM role */
+    if (config.http_io.accessId != NULL && config.http_io.ec2iam_role != NULL && config.http_io.storage_prefix == S3_STORAGE) {
+          warnx("an `accessId' must not be specified when an `accessEC2IAM' role is specified");
+          return -1;
+    }
+
+    if(config.http_io.storage_prefix == GS_STORAGE){
+         config.http_io.http_gsb.auth.u.gs.clientId = strdup(config.http_io.accessId);
+         config.http_io.http_gsb.auth.u.gs.p12_keyfile_path = strdup(config.http_io.accessKey);
          struct stat sb;
          if (stat(config.http_io.http_gsb.auth.u.gs.p12_keyfile_path, &sb) == -1) {
             warn("Incorrect path to p12 key file %s", config.http_io.http_gsb.auth.u.gs.p12_keyfile_path);
             return -1;
-	}    
-    }
-    return 0;
-	
+        }
+    } 
+    else if(config.http_io.storage_prefix == S3_STORAGE){   
+         if(config.http_io.accessId != NULL && config.http_io.accessKey != NULL) {
+             config.http_io.http_s3b.auth.u.s3.accessId = strdup(config.http_io.accessId);
+             config.http_io.http_s3b.auth.u.s3.accessKey = strdup(config.http_io.accessKey);
+         }
+         if(config.http_io.ec2iam_role != NULL)
+             config.http_io.http_s3b.auth.u.s3.ec2iam_role = strdup(config.http_io.ec2iam_role);
+   }
+
+   return 0;
 }
+
 /*
 ===============================================================================================
 * For google storage valid authentication versions are oAuth2.0 and AWS2.
@@ -1722,7 +1683,7 @@ static int check_authVersion(void){
     if(config.http_io.storage_prefix == GS_STORAGE){
           if(config.http_io.authVersion != NULL){
 	        for (i = 0; i < sizeof(gs_auth_types) / sizeof(*gs_auth_types); i++) {
-        	    if (strcmp(config.http_io.authVersion, gs_auth_types[i]) == 0)
+        	    if (strcasecmp(config.http_io.authVersion, gs_auth_types[i]) == 0)
 	            break;
         	}
 		if (i == sizeof(gs_auth_types) / sizeof(*gs_auth_types)) {
@@ -1741,7 +1702,7 @@ static int check_authVersion(void){
    else if(config.http_io.storage_prefix == S3_STORAGE){
 	 if(config.http_io.authVersion != NULL){
         	for (i = 0; i < sizeof(s3_auth_types) / sizeof(*s3_auth_types); i++) {
-	            if (strcmp(config.http_io.authVersion, s3_auth_types[i]) == 0)
+	            if (strcasecmp(config.http_io.authVersion, s3_auth_types[i]) == 0)
 	            break;
         	}
 	        if (i == sizeof(s3_auth_types) / sizeof(*s3_auth_types)) {
@@ -1773,7 +1734,7 @@ static int check_accessType(void)
              warnx("illegal access type `%s'", config.http_io.accessType);
              return -1;
           }          
-          config.http_io.http_gsb.auth.u.gs.accessType = strdup(config.http_io.accessType);
+          config.http_io.http_s3b.auth.u.s3.accessType = strdup(config.http_io.accessType);
        }
        else if(config.http_io.storage_prefix == GS_STORAGE){
           for (i = 0; i < sizeof(gs_acls) / sizeof(*gs_acls); i++) {
@@ -1803,12 +1764,45 @@ static int check_accessType(void)
 
 static int check_storageClass(void)
 {
-  if(config.http_io.storageClass != NULL){
-     if( (config.http_io.rrs) && ( (strcasecmp(config.http_io.storageClass, SCLASS_NEARLINE)==0) ||
-			           (strcasecmp(config.http_io.storageClass, SCLASS_STANDARD)==0)) )
-        return -1;
+  
+  if(config.http_io.storageClass != NULL){  
+      if(config.http_io.storage_prefix == GS_STORAGE) {
+	  if( ((strcasecmp(config.http_io.storageClass, SCLASS_REDUCED_REDUNDANCY)==0) || (config.http_io.rrs)) && 
+	      ((strcasecmp(config.http_io.storageClass, SCLASS_STANDARD)!= 0) || (strcasecmp(config.http_io.storageClass, SCLASS_NEARLINE)!= 0)) ) {
+	      if(config.http_io.rrs) 
+ 		    warnx("rrs flag cannot be used for google storage bucket.");
+	      warnx("illegal storageClass type '%s' for google storage bucket",config.http_io.storageClass);	
+	      return -1;
+          }
+      }
+      else  if(config.http_io.storage_prefix == S3_STORAGE) {
+          if(strcasecmp(config.http_io.storageClass, SCLASS_NEARLINE)==0){
+	      warnx("illegal storageClass type '%s' for s3 storage bucket",config.http_io.storageClass);
+	      return -1;	
+	  }
+          else if (strcasecmp(config.http_io.storageClass, SCLASS_REDUCED_REDUNDANCY)==0 ) {
+	       if (config.http_io.rrs){
+                  return 0;
+               }
+               else{
+	          config.http_io.rrs = 1;
+ 	          return 0;
+               }
+	  }
+	  else if(( strcasecmp(config.http_io.storageClass, SCLASS_STANDARD) == 0) && (config.http_io.rrs) ) {
+	     warnx("uncompatible flags rrs and storageClass `%s'. Ignoring rrs flag", config.http_io.storageClass);
+             config.http_io.rrs = 0; // reset rrs flag and consider only storageClass flag
+             return 0;
+	  }
+          else if( strcasecmp(config.http_io.storageClass, SCLASS_STANDARD) == 0)
+	     return 0;
+	  else {
+	     warnx("illegal storageClass type '%s'",config.http_io.storageClass);
+             return -1;
+          }		
+     }
   }
-     
+
   return 0;  
 }
 
@@ -1817,35 +1811,15 @@ dump_config(void)
 {
     int i;
 
-    (*config.log)(LOG_DEBUG, "s3backer config:");
+    (*config.log)(LOG_DEBUG, "cloudbacker config:");
     (*config.log)(LOG_DEBUG, "%24s: %s", "test mode", config.test ? "true" : "false");
     (*config.log)(LOG_DEBUG, "%24s: %s", "directIO", config.fuse_ops.direct_io ? "true" : "false");
-    
-    if(config.http_io.storage_prefix == GS_STORAGE){
-       (*config.log)(LOG_DEBUG, "%24s: \"%s\"", "clientId", config.http_io.http_gsb.auth.u.gs.clientId != NULL ? config.http_io.http_gsb.auth.u.gs.clientId : "");
-       (*config.log)(LOG_DEBUG, "%24s: \"%s\"", "p12 Key", config.http_io.http_gsb.auth.u.gs.p12_keyfile_path != NULL ? config.http_io.http_gsb.auth.u.gs.p12_keyfile_path : "");
-    }
-    else if(config.http_io.storage_prefix == S3_STORAGE){
-       (*config.log)(LOG_DEBUG, "%24s: \"%s\"", "accessId", config.http_io.http_s3b.auth.u.s3.accessId != NULL ? config.http_io.http_s3b.auth.u.s3.accessId : "");
-       (*config.log)(LOG_DEBUG, "%24s: \"%s\"", "accessKey", config.http_io.http_s3b.auth.u.s3.accessKey != NULL ? "****" : "");
-    }
+    (*config.log)(LOG_DEBUG, "%24s: \"%s\"", "accessId", config.http_io.accessId != NULL ? config.http_io.accessId : "");
+    (*config.log)(LOG_DEBUG, "%24s: \"%s\"", "accessKey", config.http_io.accessKey != NULL ? "****" : "");
     (*config.log)(LOG_DEBUG, "%24s: \"%s\"", "accessFile", config.accessFile);
-    
-    if(config.http_io.storage_prefix == GS_STORAGE){
-       (*config.log)(LOG_DEBUG, "%24s: %s", "accessType", config.http_io.http_gsb.auth.u.gs.accessType);
-    }
-    else if(config.http_io.storage_prefix == S3_STORAGE){
-       (*config.log)(LOG_DEBUG, "%24s: %s", "accessType", config.http_io.http_s3b.auth.u.s3.accessType);
-    }
-    if(config.http_io.storage_prefix == S3_STORAGE){
-       (*config.log)(LOG_DEBUG, "%24s: \"%s\"", "ec2iam_role", config.http_io.http_s3b.auth.u.s3.ec2iam_role != NULL ? config.http_io.http_s3b.auth.u.s3.ec2iam_role : "");
-       (*config.log)(LOG_DEBUG, "%24s: %s", "authVersion", config.http_io.http_s3b.auth.u.s3.authVersion);
-    }
-    else if(config.http_io.storage_prefix == GS_STORAGE){
-      // (*config.log)(LOG_DEBUG, "%24s: \"%s\"", "ec2iam_role", config.http_io.http_s3b.auth.u.s3.ec2iam_role != NULL ? config.http_io.http_s3b.auth.u.s3.ec2iam_role : "");
-       (*config.log)(LOG_DEBUG, "%24s: %s", "authVersion", config.http_io.http_gsb.auth.u.gs.authVersion);
-    }
-
+    (*config.log)(LOG_DEBUG, "%24s: %s", "accessType", config.http_io.accessType);
+    (*config.log)(LOG_DEBUG, "%24s: \"%s\"", "ec2iam_role", config.http_io.ec2iam_role != NULL ? config.http_io.ec2iam_role : "");
+    (*config.log)(LOG_DEBUG, "%24s: %s", "authVersion", config.http_io.authVersion);
     (*config.log)(LOG_DEBUG, "%24s: \"%s\"", "baseURL", config.http_io.baseURL);
     (*config.log)(LOG_DEBUG, "%24s: \"%s\"", "region", config.http_io.region);
     (*config.log)(LOG_DEBUG, "%24s: \"%s\"", config.test ? "testdir" : "bucket", config.http_io.bucket);
@@ -1960,10 +1934,10 @@ usage(void)
     int i;
 
     fprintf(stderr, "Usage:\n");
-    fprintf(stderr, "\ts3backer [options] bucket /mount/point\n");
-    fprintf(stderr, "\ts3backer --test [options] directory /mount/point\n");
-    fprintf(stderr, "\ts3backer --erase [options] bucket\n");
-    fprintf(stderr, "\ts3backer --reset-mounted-flag [options] bucket\n");
+    fprintf(stderr, "\tcloudbacker [options] bucket /mount/point\n");
+    fprintf(stderr, "\tcloudbacker --test [options] directory /mount/point\n");
+    fprintf(stderr, "\tcloudbacker --erase [options] bucket\n");
+    fprintf(stderr, "\tcloudbacker --reset-mounted-flag [options] bucket\n");
     fprintf(stderr, "Options:\n");
     fprintf(stderr, "\t--%-27s %s\n", "accessFile=FILE", "File containing `accessID:accessKey' pairs");
     fprintf(stderr, "\t--%-27s %s\n", "accessId=ID", "S3 access key ID");

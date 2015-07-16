@@ -50,7 +50,7 @@
 #define S3B_FILE_SIZE_HEADER            "x-amz-meta-s3backer-filesize"
 #define S3B_BLOCK_SIZE_HEADER           "x-amz-meta-s3backer-blocksize"
 #define S3B_NAME_HASH_HEADER            "x-amz-meta-s3backer-namehash"
-#define S3B_HMAC_HEADER                 "x-amz-meta-cloudbacker.hmac"
+#define S3B_HMAC_HEADER                 "x-amz-meta-s3backer.hmac"
 #define S3B_ACL_HEADER                  "x-amz-acl"
 #define S3B_CONTENT_SHA256_HEADER       "x-amz-content-sha256"
 #define S3B_STORAGE_CLASS_HEADER        "x-amz-storage-class"
@@ -110,7 +110,7 @@
 /* GS-specific HTTP definitions */
 #define GSB_FILE_SIZE_HEADER            "x-goog-meta-gsbacker-filesize"
 #define GSB_BLOCK_SIZE_HEADER           "x-goog-meta-gsbacker-blocksize"
-#define GSB_NAME_HASH_HEADER            "x-goog-meta-s3backer-namehash"
+#define GSB_NAME_HASH_HEADER            "x-goog-meta-gsbacker-namehash"
 #define GSB_HMAC_HEADER                 "x-goog-meta-gsbacker.hmac"
 #define GSB_ACL_HEADER                  "x-goog-acl"
 #define GSB_CONTENT_SHA256_HEADER       "x-goog-content-sha256"

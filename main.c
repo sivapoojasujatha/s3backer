@@ -67,7 +67,7 @@ main(int argc, char **argv)
     fuse_ops = fuse_ops_create(&config->fuse_ops);
 
     /* Start */
-    (*config->log)(LOG_INFO, "s3backer process %lu for %s started", (u_long)getpid(), config->mount);
+    (*config->log)(LOG_INFO, "cloudbacker process %lu for %s started", (u_long)getpid(), config->mount);
     return fuse_main(config->fuse_args.argc, config->fuse_args.argv, fuse_ops, NULL);
 }
 

@@ -277,6 +277,9 @@ struct http_io_conf {
     struct http_io_s3b  http_s3b;
     struct http_io_gsb  http_gsb;
     char       		*bucket;
+    char		*accessId;
+    char		*accessKey;
+    char		*ec2iam_role;
     const char          *accessType;	
     const char 		*authVersion;
     const char          *baseURL;

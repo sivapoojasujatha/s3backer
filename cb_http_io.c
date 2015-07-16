@@ -1304,9 +1304,9 @@ static int cb_http_io_add_auth(struct http_io_private *priv, struct http_io *con
        if (config->http_s3b.auth.u.s3.accessId == NULL)
            return 0;
        /* Which auth version? */
-       if (strcmp(config->http_s3b.auth.u.s3.authVersion, AUTH_VERSION_AWS2) == 0)
+       if (strcasecmp(config->http_s3b.auth.u.s3.authVersion, AUTH_VERSION_AWS2) == 0)
            return cb_http_io_add_auth2(priv, io, now, payload, plen);
-       if (strcmp(config->http_s3b.auth.u.s3.authVersion, AUTH_VERSION_AWS4) == 0)
+       if (strcasecmp(config->http_s3b.auth.u.s3.authVersion, AUTH_VERSION_AWS4) == 0)
            return cb_http_io_add_auth4(priv, io, now, payload, plen);
 	
        /* Oops */
@@ -1314,12 +1314,10 @@ static int cb_http_io_add_auth(struct http_io_private *priv, struct http_io *con
     }
     else if(config->storage_prefix == GS_STORAGE) {
        /* Anything to do? */
-       if ( (config->http_gsb.auth.u.gs.clientId == NULL) || (strcmp(config->http_gsb.auth.u.gs.authVersion, AUTH_VERSION_OAUTH2) == 0) )
+       if ( (config->http_gsb.auth.u.gs.clientId == NULL) || (strcasecmp(config->http_gsb.auth.u.gs.authVersion, AUTH_VERSION_OAUTH2) == 0) )
            return 0;
 
-       if (strcmp(config->http_gsb.auth.u.gs.authVersion, AUTH_VERSION_AWS2) == 0)
-           return cb_http_io_add_auth2(priv, io, now, payload, plen);
-       if(strcmp(config->http_gsb.auth.u.gs.authVersion, AUTH_VERSION_OAUTH2) == 0)
+       if(strcasecmp(config->http_gsb.auth.u.gs.authVersion, AUTH_VERSION_OAUTH2) == 0)
            return  cb_http_io_add_oAuth2(priv, io, now, NULL, 0);
        
        /* Oops */
@@ -1369,7 +1367,6 @@ static int cb_http_io_add_oAuth2(struct http_io_private *priv, struct http_io *c
     qsort(amz_hdrs, num_amz_hdrs, sizeof(*amz_hdrs), http_io_strcasecmp_ptr);
     resource = config->vhost ? io->url + strlen(config->baseURL) - 1 : io->url + strlen(config->baseURL) + strlen(config->bucket);
     resource_len = (qmark = strchr(resource, '?')) != NULL ? qmark - resource : strlen(resource);
-
 
     io->headers = http_io_add_header(io->headers, "%s: Bearer %s", AUTH_HEADER,config->http_gsb.auth.u.gs.auth_token);
  /* Done */
@@ -2236,8 +2233,9 @@ set_http_io_params(struct http_io_private *priv){
         strcpy(priv->config->http_io_params->content_sha256_header, GSB_CONTENT_SHA256_HEADER);
         strcpy(priv->config->http_io_params->storage_class_header, GSB_STORAGE_CLASS_HEADER);
         if( strcasecmp(priv->config->storageClass, SCLASS_NEARLINE) == 0)
-             strcpy(priv->config->http_io_params->storage_class_headerval, SCLASS_NEARLINE);
-                 
+            strcpy(priv->config->http_io_params->storage_class_headerval, SCLASS_NEARLINE);
+        else
+            strcpy(priv->config->http_io_params->storage_class_headerval, SCLASS_STANDARD);     
         if ( (strcasecmp(priv->config->http_gsb.auth.u.gs.authVersion, AUTH_VERSION_AWS2) == 0)||
              (strcasecmp(priv->config->http_gsb.auth.u.gs.authVersion, AUTH_VERSION_OAUTH2) == 0) ){
 	         strcpy(priv->config->http_io_params->date_header, HTTP_DATE_HEADER);
@@ -2257,6 +2255,8 @@ set_http_io_params(struct http_io_private *priv){
          strcpy(priv->config->http_io_params->storage_class_header, S3B_STORAGE_CLASS_HEADER);
          if(priv->config->rrs)
              strcpy(priv->config->http_io_params->storage_class_headerval, SCLASS_REDUCED_REDUNDANCY);
+         else
+            strcpy(priv->config->http_io_params->storage_class_headerval, SCLASS_STANDARD);
     
 	if (strcasecmp(priv->config->http_s3b.auth.u.s3.authVersion, AUTH_VERSION_AWS2) == 0){
     	     strcpy(priv->config->http_io_params->date_header, HTTP_DATE_HEADER);
