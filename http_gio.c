@@ -38,13 +38,9 @@ http_io_create(struct http_io_conf *config)
         (*config->log)(LOG_ERR, "http_io creation failed: %s", strerror(r));
         return NULL;
     }   
+    
+    backerstore = cb_http_io_create(config);
 
-    if(config->storage_prefix == GS_STORAGE){
-         backerstore = cb_http_io_create(config);
-    }
-    else if(config->storage_prefix == S3_STORAGE){
-        backerstore = cb_http_io_create(config);
-    }
     return backerstore;
 }
 

@@ -1314,8 +1314,8 @@ static int cb_http_io_add_auth(struct http_io_private *priv, struct http_io *con
     }
     else if(config->storage_prefix == GS_STORAGE) {
        /* Anything to do? */
-       if ( (config->http_gsb.auth.u.gs.clientId == NULL) || (strcasecmp(config->http_gsb.auth.u.gs.authVersion, AUTH_VERSION_OAUTH2) == 0) )
-           return 0;
+       if ( (config->http_gsb.auth.u.gs.clientId == NULL) && (strcasecmp(config->http_gsb.auth.u.gs.authVersion, AUTH_VERSION_OAUTH2) == 0) )
+           return EINVAL;
 
        if(strcasecmp(config->http_gsb.auth.u.gs.authVersion, AUTH_VERSION_OAUTH2) == 0)
            return  cb_http_io_add_oAuth2(priv, io, now, NULL, 0);
