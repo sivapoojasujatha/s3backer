@@ -23,22 +23,33 @@
 #ifndef AUTH_CONF_H
 #define AUTH_CONF_H
 
-/* S3-specific configuration info */
+/* cloudbacker authentication specific configuration info */
 
 struct auth_conf {
+
     union {
-	struct {
-	    char                *accessId;
-	    char                *accessKey;
-	    char                *iam_token;
-	    const char          *accessType;
-	    const char          *ec2iam_role;
-	    const char          *authVersion;
+
+        /* S3 authentication specific configuration info */
+        struct {
+	    char                *accessId;             /* Amazon s3 access Id */
+	    char                *accessKey;            /* Amazon s3 secret or access key */
+	    char                *iam_token;            /* EC2 IAM token */
+	    const char          *accessType;           /* accesstype for the Amazon s3 bucket */
+	    const char          *ec2iam_role;          /* EC2 IAM role */
+	    const char          *authVersion;          /* authentication version, AWS4 or AWS2 */
 	} s3;
+       
+        /* Google storage authentication specific configuration info */
 	struct {
-	    int unused;
+	    char                *clientId;              /* google cloud storage clienId(xyz@developer.gserviceaccount.com) */
+            char                *secret_keyfile;        /* google cloud storage downloaded secret key file(either p12 or json format) */
+            char                *auth_token;            /* authorization token to get access to resources/APIs */
+            const char          *accessType;            /* accesstype for the google cloud storage bucket */
+            const char          *authVersion;           /* authentication version, oAUTH 2.0 or AWS2 */
+
 	} gs;
-    } u;
+
+    } u;       
 };
 
 #endif

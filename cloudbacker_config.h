@@ -26,7 +26,7 @@
 #include "http_gio.h"
 
 /* Overal application configuration info */
-struct s3b_config {
+struct cb_config {
 
     /* Various sub-module configurations */
     struct block_cache_conf     block_cache;
@@ -61,7 +61,7 @@ struct s3b_config {
     int                         encrypt;
 };
 
-extern struct s3b_config *s3backer_get_config(int argc, char **argv);
-extern struct s3backer_store *s3backer_create_store(struct s3b_config *config);
+extern struct cb_config *cloudbacker_get_config(int argc, char **argv);
+extern struct cloudbacker_store *cloudbacker_create_store(struct cb_config *config);
 
 #endif

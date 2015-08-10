@@ -25,19 +25,19 @@
  * We pre-allocate the hash array based on the expected maximum size.
  */
 
-#include "s3backer.h"
+#include "cloudbacker.h"
 #include "hash.h"
 
 /* Definitions */
 #define LOAD_FACTOR                 0.666666
-#define FIRST(hash, key)            (s3b_hash_index((hash), (key)))
+#define FIRST(hash, key)            (cb_hash_index((hash), (key)))
 #define NEXT(hash, index)           ((index) + 1 < (hash)->alen ? (index) + 1 : 0)
 #define EMPTY(value)                ((value) == NULL)
 #define VALUE(hash, index)          ((hash)->array[(index)])
-#define KEY(value)                  (*(s3b_block_t *)(value))
+#define KEY(value)                  (*(cb_block_t *)(value))
 
 /* Hash table structure */
-struct s3b_hash {
+struct cb_hash {
     u_int       maxkeys;            /* max capacity */
     u_int       numkeys;            /* number of keys in table */
     u_int       alen;               /* hash array length */
@@ -45,14 +45,14 @@ struct s3b_hash {
 };
 
 /* Declarations */
-static u_int s3b_hash_index(struct s3b_hash *hash, s3b_block_t key);
+static u_int cb_hash_index(struct cb_hash *hash, cb_block_t key);
 
 /* Public functions */
 
 int
-s3b_hash_create(struct s3b_hash **hashp, u_int maxkeys)
+cb_hash_create(struct cb_hash **hashp, u_int maxkeys)
 {
-    struct s3b_hash *hash;
+    struct cb_hash *hash;
     u_int alen;
 
     if (maxkeys >= (u_int)(UINT_MAX * LOAD_FACTOR) - 1)
@@ -67,19 +67,19 @@ s3b_hash_create(struct s3b_hash **hashp, u_int maxkeys)
 }
 
 void
-s3b_hash_destroy(struct s3b_hash *hash)
+cb_hash_destroy(struct cb_hash *hash)
 {
     free(hash);
 }
 
 u_int
-s3b_hash_size(struct s3b_hash *hash)
+cb_hash_size(struct cb_hash *hash)
 {
     return hash->numkeys;
 }
 
 void *
-s3b_hash_get(struct s3b_hash *hash, s3b_block_t key)
+cb_hash_get(struct cb_hash *hash, cb_block_t key)
 {
     u_int i;
 
@@ -94,9 +94,9 @@ s3b_hash_get(struct s3b_hash *hash, s3b_block_t key)
 }
 
 void *
-s3b_hash_put(struct s3b_hash *hash, void *value)
+cb_hash_put(struct cb_hash *hash, void *value)
 {
-    const s3b_block_t key = KEY(value);
+    const cb_block_t key = KEY(value);
     u_int i;
 
     for (i = FIRST(hash, key); 1; i = NEXT(hash, i)) {
@@ -116,12 +116,12 @@ s3b_hash_put(struct s3b_hash *hash, void *value)
 }
 
 /*
- * Optimization of s3b_hash_put() for when it is known that no matching entry exists.
+ * Optimization of cb_hash_put() for when it is known that no matching entry exists.
  */
 void
-s3b_hash_put_new(struct s3b_hash *hash, void *value)
+cb_hash_put_new(struct cb_hash *hash, void *value)
 {
-    const s3b_block_t key = KEY(value);
+    const cb_block_t key = KEY(value);
     u_int i;
 
     for (i = FIRST(hash, key); 1; i = NEXT(hash, i)) {
@@ -137,7 +137,7 @@ s3b_hash_put_new(struct s3b_hash *hash, void *value)
 }
 
 void
-s3b_hash_remove(struct s3b_hash *hash, s3b_block_t key)
+cb_hash_remove(struct cb_hash *hash, cb_block_t key)
 {
     u_int i;
     u_int j;
@@ -173,7 +173,7 @@ s3b_hash_remove(struct s3b_hash *hash, s3b_block_t key)
 }
 
 void
-s3b_hash_foreach(struct s3b_hash *hash, s3b_hash_visit_t *visitor, void *arg)
+cb_hash_foreach(struct cb_hash *hash, cb_hash_visit_t *visitor, void *arg)
 {
     u_int i;
 
@@ -189,7 +189,7 @@ s3b_hash_foreach(struct s3b_hash *hash, s3b_hash_visit_t *visitor, void *arg)
  * Jenkins one-at-a-time hash
  */
 static u_int
-s3b_hash_index(struct s3b_hash *hash, s3b_block_t key)
+cb_hash_index(struct cb_hash *hash, cb_block_t key)
 {
     u_int value = 0;
     int i;

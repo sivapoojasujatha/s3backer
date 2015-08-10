@@ -86,24 +86,24 @@
 /*
  * Integral type for holding a block number.
  */
-typedef uint32_t    s3b_block_t;
+typedef uint32_t    cb_block_t;
 
 /*
  * How many hex digits we will use to print a block number.
  */
-#define S3B_BLOCK_NUM_DIGITS    ((int)(sizeof(s3b_block_t) * 2))
+#define CB_BLOCK_NUM_DIGITS    ((int)(sizeof(cb_block_t) * 2))
 
 /* Logging function type */
 typedef void        log_func_t(int level, const char *fmt, ...) __attribute__ ((__format__ (__printf__, 2, 3)));
 
 /* Block list callback function type */
-typedef void        block_list_func_t(void *arg, s3b_block_t block_num);
+typedef void        block_list_func_t(void *arg, cb_block_t block_num);
 
 /* Block write cancel check function type */
-typedef int         check_cancel_t(void *arg, s3b_block_t block_num);
+typedef int         check_cancel_t(void *arg, cb_block_t block_num);
 
 /* Backing store instance structure */
-struct s3backer_store {
+struct cloudbacker_store {
 
     /*
      * Get meta-data associated with the underlying store.
@@ -119,7 +119,7 @@ struct s3backer_store {
      *  ENOENT  Information not found
      *  Other   Other error
      */
-  int         (*meta_data)(struct s3backer_store *s3b, off_t *file_sizep, u_int *block_sizep, u_int *name_hashp);
+    int         (*meta_data)(struct cloudbacker_store *cb, off_t *file_sizep, u_int *block_sizep, u_int *name_hashp);
 
     /*
      * Read and (optionally) set the mounted flag.
@@ -133,7 +133,7 @@ struct s3backer_store {
      *
      * Returns zero on success or a (positive) errno value on error.
      */
-    int         (*set_mounted)(struct s3backer_store *s3b, int *old_valuep, int new_value);
+    int         (*set_mounted)(struct cloudbacker_store *cb, int *old_valuep, int new_value);
 
     /*
      * Read one block. Never-written-to blocks will return all zeroes.
@@ -153,7 +153,7 @@ struct s3backer_store {
      *
      * Returns zero on success or a (positive) errno value on error.
      */
-    int         (*read_block)(struct s3backer_store *s3b, s3b_block_t block_num, void *dest,
+    int         (*read_block)(struct cloudbacker_store *cb, cb_block_t block_num, void *dest,
                   u_char *actual_md5, const u_char *expect_md5, int strict);
 
     /*
@@ -161,7 +161,7 @@ struct s3backer_store {
      *
      * Returns zero on success or a (positive) errno value on error.
      */
-    int         (*read_block_part)(struct s3backer_store *s3b, s3b_block_t block_num, u_int off, u_int len, void *dest);
+    int         (*read_block_part)(struct cloudbacker_store *cb, cb_block_t block_num, u_int off, u_int len, void *dest);
 
     /*
      * Write one block.
@@ -176,7 +176,7 @@ struct s3backer_store {
      *
      * Returns zero on success or a (positive) errno value on error.
      */
-    int         (*write_block)(struct s3backer_store *s3b, s3b_block_t block_num, const void *src, u_char *md5,
+    int         (*write_block)(struct cloudbacker_store *cb, cb_block_t block_num, const void *src, u_char *md5,
                   check_cancel_t *check_cancel, void *arg);
 
     /*
@@ -184,24 +184,24 @@ struct s3backer_store {
      *
      * Returns zero on success or a (positive) errno value on error.
      */
-    int         (*write_block_part)(struct s3backer_store *s3b, s3b_block_t block_num, u_int off, u_int len, const void *src);
+    int         (*write_block_part)(struct cloudbacker_store *cb, cb_block_t block_num, u_int off, u_int len, const void *src);
 
     /*
      * Identify all non-zero blocks.
      *
      * Returns zero on success or a (positive) errno value on error.
      */
-    int         (*list_blocks)(struct s3backer_store *s3b, block_list_func_t *callback, void *arg);
+    int         (*list_blocks)(struct cloudbacker_store *cb, block_list_func_t *callback, void *arg);
 
     /*
      * Sync any dirty data to the underlying data store.
      */
-    int         (*flush)(struct s3backer_store *s3b);
+    int         (*flush)(struct cloudbacker_store *cb);
 
     /*
      * Destroy this instance.
      */
-    void        (*destroy)(struct s3backer_store *s3b);
+    void        (*destroy)(struct cloudbacker_store *cb);
 
     /*
      * Implementation private data
@@ -210,5 +210,5 @@ struct s3backer_store {
 };
 
 /* gitrev.c */
-extern const char *const s3backer_version;
+extern const char *const cloudbacker_version;
 

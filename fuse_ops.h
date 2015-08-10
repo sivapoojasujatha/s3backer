@@ -21,7 +21,7 @@
  */
 
 /* Forward decl's */
-struct s3b_config;
+struct cb_config;
 
 /* Function types */
 typedef void printer_t(void *prarg, const char *fmt, ...) __attribute__ ((__format__ (__printf__, 2, 3)));
@@ -29,7 +29,7 @@ typedef void print_stats_t(void *prarg, printer_t *printer);
 
 /* Configuration info structure for fuse_ops */
 struct fuse_ops_conf {
-    struct s3b_config       *s3bconf;
+    struct cb_config        *cbconf;
     print_stats_t           *print_stats;
     int                     read_only;
     int                     direct_io;

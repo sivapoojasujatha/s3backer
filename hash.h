@@ -25,24 +25,24 @@
  *
  * We make the following simplifying assumptions:
  *
- * 1.  Keys are of type s3b_block_t
+ * 1.  Keys are of type cb_block_t
  * 2.  Values are structures in which the first field is the key
  * 3.  No attempts will be made to overload the table
  */
 
 /* Definitions */
-typedef void s3b_hash_visit_t(void *arg, void *value);
+typedef void cb_hash_visit_t(void *arg, void *value);
 
 /* Declarations */
-struct s3b_hash;
+struct cb_hash;
 
 /* hash.c */
-extern int s3b_hash_create(struct s3b_hash **hashp, u_int maxkeys);
-extern void s3b_hash_destroy(struct s3b_hash *hash);
-extern u_int s3b_hash_size(struct s3b_hash *hash);
-extern void *s3b_hash_get(struct s3b_hash *hash, s3b_block_t key);
-extern void *s3b_hash_put(struct s3b_hash *hash, void *value);
-extern void s3b_hash_put_new(struct s3b_hash *hash, void *value);
-extern void s3b_hash_remove(struct s3b_hash *hash, s3b_block_t key);
-extern void s3b_hash_foreach(struct s3b_hash *hash, s3b_hash_visit_t *visitor, void *arg);
+extern int cb_hash_create(struct cb_hash **hashp, u_int maxkeys);
+extern void cb_hash_destroy(struct cb_hash *hash);
+extern u_int cb_hash_size(struct cb_hash *hash);
+extern void *cb_hash_get(struct cb_hash *hash, cb_block_t key);
+extern void *cb_hash_put(struct cb_hash *hash, void *value);
+extern void cb_hash_put_new(struct cb_hash *hash, void *value);
+extern void cb_hash_remove(struct cb_hash *hash, cb_block_t key);
+extern void cb_hash_foreach(struct cb_hash *hash, cb_hash_visit_t *visitor, void *arg);
 

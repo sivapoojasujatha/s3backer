@@ -21,8 +21,8 @@
  */
 
 /* block_part.c */
-extern int block_part_read_block_part(struct s3backer_store *inner, s3b_block_t block_num,
+extern int block_part_read_block_part(struct cloudbacker_store *inner, cb_block_t block_num,
     u_int block_size, u_int off, u_int len, void *dest);
-extern int block_part_write_block_part(struct s3backer_store *s3b, s3b_block_t block_num,
+extern int block_part_write_block_part(struct cloudbacker_store *cb, cb_block_t block_num,
     u_int block_size, u_int off, u_int len, const void *src);
 

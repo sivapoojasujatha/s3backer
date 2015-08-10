@@ -1,7 +1,6 @@
-
 /*
  * s3backer - FUSE-based single file backing store via Amazon S3
- * 
+ *
  * Copyright 2008-2011 Archie L. Cobbs <archie@dellroad.org>
  * 
  * This program is free software; you can redistribute it and/or
@@ -20,25 +19,30 @@
  * 02110-1301, USA.
  */
 
-/* Configuration info structure for ec_protect store */
-struct ec_protect_conf {
-    u_int               block_size;
-    u_int               min_write_delay;
-    u_int               cache_time;
-    u_int               cache_size;
-    log_func_t          *log;
-};
+#ifndef GSB_HTTP_IO_H
+#define GSB_HTTP_IO_H
 
-/* Statistics structure for ec_protect store */
-struct ec_protect_stats {
-    u_int               current_cache_size;
-    u_int               cache_data_hits;
-    uint64_t            cache_full_delay;
-    uint64_t            repeated_write_delay;
-    u_int               out_of_memory_errors;
-};
+#include "http_gio.h"
 
-/* ec_protect.c */
-extern struct cloudbacker_store *ec_protect_create(struct ec_protect_conf *config, struct cloudbacker_store *inner);
-extern void ec_protect_get_stats(struct cloudbacker_store *cb, struct ec_protect_stats *stats);
+/*
+ * Cloudbacker - Google Cloud Storage specific parameters
+ */
 
+#define AUTH_VERSION_OAUTH2   		"oauth2"
+#define GCS_OAUTH2_ACCESS_TOKEN         "access_token"
+
+/* HTTP IO specific definitions */
+#define GSB_FILE_SIZE_HEADER            "x-goog-meta-gsbacker-filesize"
+#define GSB_BLOCK_SIZE_HEADER           "x-goog-meta-gsbacker-blocksize"
+#define GSB_NAME_HASH_HEADER            "x-goog-meta-gsbacker-namehash"
+#define GSB_HMAC_HEADER                 "x-goog-meta-gsbacker.hmac"
+#define GSB_ACL_HEADER                  "x-goog-acl"
+#define GSB_CONTENT_SHA256_HEADER       "x-goog-content-sha256"
+#define GSB_STORAGE_CLASS_HEADER        "x-goog-storage-class"
+
+/*
+ * Function Prototypes
+ */
+
+
+#endif

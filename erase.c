@@ -20,13 +20,13 @@
  * 02110-1301, USA.
  */
 
-#include "s3backer.h"
+#include "cloudbacker.h"
 #include "block_cache.h"
 #include "ec_protect.h"
 #include "fuse_ops.h"
 #include "s3b_http_io.h"
 #include "test_io.h"
-#include "s3b_config.h"
+#include "cloudbacker_config.h"
 #include "erase.h"
 
 #define BLOCKS_PER_DOT          0x100
@@ -35,8 +35,8 @@
 
 /* Erasure state */
 struct erase_state {
-    struct s3backer_store       *s3b;
-    s3b_block_t                 queue[MAX_QUEUE_LENGTH];
+    struct cloudbacker_store    *cb;
+    cb_block_t                  queue[MAX_QUEUE_LENGTH];
     u_int                       qlen;
     pthread_t                   threads[NUM_ERASURE_THREADS];
     int                         quiet;
@@ -48,11 +48,11 @@ struct erase_state {
 };
 
 /* Internal functions */
-static void erase_list_callback(void *arg, s3b_block_t block_num);
+static void erase_list_callback(void *arg, cb_block_t block_num);
 static void *erase_thread_main(void *arg);
 
 int
-s3backer_erase(struct s3b_config *config)
+cloudbacker_erase(struct cb_config *config)
 {
     struct erase_state state;
     struct erase_state *const priv = &state;
@@ -64,7 +64,7 @@ s3backer_erase(struct s3b_config *config)
     /* Double check with user */
     if (!config->force) {
         warnx("`--erase' flag given: erasing all blocks in %s", config->description);
-        fprintf(stderr, "s3backer: is this correct? [y/N] ");
+        fprintf(stderr, "cloudbacker: is this correct? [y/N] ");
         *response = '\0';
         if (fgets(response, sizeof(response), stdin) != NULL) {
             while (*response && isspace(response[strlen(response) - 1]))
@@ -98,24 +98,24 @@ s3backer_erase(struct s3b_config *config)
 
     /* Logging */
     if (!config->quiet) {
-        fprintf(stderr, "s3backer: erasing non-zero blocks...");
+        fprintf(stderr, "cloudbacker: erasing non-zero blocks...");
         fflush(stderr);
     }
 
     /* Create temporary lower layer */
-    if ((priv->s3b = config->test ? test_io_create(&config->http_io) : http_io_create(&config->http_io)) == NULL) {
+    if ((priv->cb = config->test ? test_io_create(&config->http_io) : http_io_create(&config->http_io)) == NULL) {
         warnx(config->test ? "test_io_create" : "http_io_create");
         goto fail3;
     }
 
     /* Iterate over non-zero blocks */
-    if ((r = (*priv->s3b->list_blocks)(priv->s3b, erase_list_callback, priv)) != 0) {
+    if ((r = (*priv->cb->list_blocks)(priv->cb, erase_list_callback, priv)) != 0) {
         warnx("can't list blocks: %s", strerror(r));
         goto fail3;
     }
 
     /* Clear mounted flag */
-    if ((r = (*priv->s3b->set_mounted)(priv->s3b, NULL, 0)) != 0) {
+    if ((r = (*priv->cb->set_mounted)(priv->cb, NULL, 0)) != 0) {
         warnx("can't clear mounted flag: %s", strerror(r));
         goto fail3;
     }
@@ -135,12 +135,12 @@ fail3:
         if ((r = pthread_join(priv->threads[i], NULL)) != 0)
             warnx("pthread_join: %s", strerror(r));
     }
-    if (priv->s3b != NULL) {
+    if (priv->cb != NULL) {
         if (ok && !config->quiet) {
             fprintf(stderr, "done\n");
             warnx("erased %ju non-zero blocks", priv->count);
         }
-        (*priv->s3b->destroy)(priv->s3b);
+        (*priv->cb->destroy)(priv->cb);
     }
     pthread_cond_destroy(&priv->queue_not_full);
 fail2:
@@ -152,7 +152,7 @@ fail0:
 }
 
 static void
-erase_list_callback(void *arg, s3b_block_t block_num)
+erase_list_callback(void *arg, cb_block_t block_num)
 {
     struct erase_state *const priv = arg;
 
@@ -168,7 +168,7 @@ static void *
 erase_thread_main(void *arg)
 {
     struct erase_state *const priv = arg;
-    s3b_block_t block_num;
+    cb_block_t block_num;
     int r;
 
     /* Acquire lock */
@@ -187,12 +187,12 @@ erase_thread_main(void *arg)
 
             /* Do block deletion */
             pthread_mutex_unlock(&priv->mutex);
-            r = (*priv->s3b->write_block)(priv->s3b, block_num, NULL, NULL, NULL, NULL);
+            r = (*priv->cb->write_block)(priv->cb, block_num, NULL, NULL, NULL, NULL);
             pthread_mutex_lock(&priv->mutex);
 
             /* Check for error */
             if (r != 0) {
-                warnx("can't delete block %0*jx: %s", S3B_BLOCK_NUM_DIGITS, (uintmax_t)block_num, strerror(r));
+                warnx("can't delete block %0*jx: %s", CB_BLOCK_NUM_DIGITS, (uintmax_t)block_num, strerror(r));
                 continue;
             }
 

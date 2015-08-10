@@ -42,14 +42,73 @@
 #define CONTENT_ENCODING_DEFLATE    "deflate"
 #define CONTENT_ENCODING_ENCRYPT    "encrypt"
 #define MD5_HEADER                  "Content-MD5"
-#define SCLASS_STANDARD             "STANDARD"
-#define SCLASS_REDUCED_REDUNDANCY   "REDUCED_REDUNDANCY"
 #define IF_MATCH_HEADER             "If-Match"
 #define IF_NONE_MATCH_HEADER        "If-None-Match"
+
+/* storage class definitions */
+
+/* SCLASS_STANDARD storage class is common for both S3 and GS */
+#define SCLASS_STANDARD                "STANDARD"
+
+/* S3 specific storage class definition */
+#define SCLASS_S3_REDUCED_REDUNDANCY   "REDUCED_REDUNDANCY"
+
+/* GS specific storage class definition */
+#define SCLASS_GS_NEARLINE             "NEARLINE"
+#define SCLASS_GS_DRA		       "DURABLE_REDUCED_AVAILABILITY"
 
 /* Upload/download indexes */
 #define HTTP_DOWNLOAD       0
 #define HTTP_UPLOAD         1
+
+/* MIME type for mounted flag */
+#define MOUNTED_FLAG_CONTENT_TYPE   "text/plain"
+
+/* Mounted file object name */
+#define MOUNTED_FLAG                "cloudbacker-mounted"
+
+/* MIME type for blocks */
+#define CONTENT_TYPE                "application/x-cloudbacker-block"
+
+/* HTTP `Date' and `x-amz-date' header formats */
+#define HTTP_DATE_HEADER            "Date"
+#define HTTP_DATE_BUF_FMT           "%a, %d %b %Y %H:%M:%S GMT"
+#define DATE_BUF_SIZE               64
+
+/* Size required for URL buffer */
+#define URL_BUF_SIZE(config)        (strlen((config)->baseURL) + strlen((config)->bucket) \
+                                      + strlen((config)->prefix) + CB_BLOCK_NUM_DIGITS + 2)
+
+/* Bucket listing API constants */
+#define LIST_PARAM_MARKER           "marker"
+#define LIST_PARAM_PREFIX           "prefix"
+#define LIST_PARAM_MAX_KEYS         "max-keys"
+
+#define LIST_ELEM_LIST_BUCKET_RESLT "ListBucketResult"
+#define LIST_ELEM_IS_TRUNCATED      "IsTruncated"
+#define LIST_ELEM_CONTENTS          "Contents"
+#define LIST_ELEM_KEY               "Key"
+#define LIST_TRUE                   "true"
+#define LIST_MAX_PATH               (sizeof(LIST_ELEM_LIST_BUCKET_RESLT) \
+                                      + sizeof(LIST_ELEM_CONTENTS) \
+                                      + sizeof(LIST_ELEM_KEY) + 1)
+
+/* How many blocks to list at a time */
+#define LIST_BLOCKS_CHUNK           0x100
+
+/* PBKDF2 key generation iterations */
+#define PBKDF2_ITERATIONS           5000
+
+/* Enable to debug encryption key stuff */
+#define DEBUG_ENCRYPTION            0
+
+/* Enable to debug authentication stuff */
+#define DEBUG_AUTHENTICATION        0
+
+#define WHITESPACE                  " \t\v\f\r\n"
+
+/* cloudbacker storage prefix */
+typedef enum {GS_STORAGE, S3_STORAGE}storage_type;
 
 /* Statistics structure for http_io store */
 struct http_io_evst {
@@ -152,7 +211,7 @@ struct http_io {
     int                 xml_text_len;           // # chars in 'xml_text' buffer
     int                 xml_text_max;           // max chars in 'xml_text' buffer
     int                 list_truncated;         // returned list was truncated
-    s3b_block_t         last_block;             // last dirty block listed
+    cb_block_t         last_block;             // last dirty block listed
     block_list_func_t   *callback_func;         // callback func for listing blocks
     void                *callback_arg;          // callback arg for listing blocks
     struct http_io_conf *config;                // configuration
@@ -163,15 +222,15 @@ struct http_io {
     struct curl_slist   *headers;               // HTTP headers
     void                *dest;                  // Block data (when reading)
     const void          *src;                   // Block data (when writing)
-    s3b_block_t         block_num;              // The block we're reading/writing
+    cb_block_t          block_num;              // The block we're reading/writing
     u_int               buf_size;               // Size of data buffer
     u_int               *content_lengthp;       // Returned Content-Length
-    uintmax_t           file_size;              // file size from "x-amz-meta-s3backer-filesize"
-    u_int               block_size;             // block size from "x-amz-meta-s3backer-blocksize"
-    u_int		name_hash;		// object name hashing from "x-amz-meta-s3backer-namehash"
+    uintmax_t           file_size;              // file size from "x-[amz]/[goog]-meta-s3backer-filesize"
+    u_int               block_size;             // block size from "x-[amz]/[goog]-meta-s3backer-blocksize"
+    u_int		name_hash;		// object name hashing from "x-[amz]/[goog]-meta-s3backer-namehash"
     u_int               expect_304;             // a verify request; expect a 304 response
     u_char              md5[MD5_DIGEST_LENGTH]; // parsed ETag header
-    u_char              hmac[SHA_DIGEST_LENGTH];// parsed "x-amz-meta-s3backer-hmac" header
+    u_char              hmac[SHA_DIGEST_LENGTH];// parsed "x-[amz]/[goog]-meta-cloudbacker.hmac" header
     char                content_encoding[32];   // received content encoding
     check_cancel_t      *check_cancel;          // write check-for-cancel callback
     void                *check_cancel_arg;      // write check-for-cancel callback argument
@@ -180,22 +239,28 @@ struct http_io {
 /* Generic configuration info structure for http_io store */
 struct http_io_conf {
     struct auth_conf	auth;
+    char		*accessId;
+    char		*accessKey;
+    char		*ec2iam_role;
+    char                *bucket;
+    const char          *accessType;	
+    const char          *authVersion;
     const char          *baseURL;
     const char          *region;
-    const char          *bucket;
     const char          *prefix;
     const char          *user_agent;
     const char          *cacert;
     const char          *password;
     const char          *encryption;
+    const char          *storageClass;
     u_int               key_length;
     u_int		name_hash;
     int                 debug;
     int                 debug_http;
     int                 quiet;
-    int                 rrs;                        // reduced redundancy storage
     int                 compress;                   // zlib compression level
     int                 vhost;                      // use virtual host style URL
+    int  		storage_prefix;             // GS_STORAGE or S3_STORAGE
     u_int               *nonzero_bitmap;            // is set to NULL by http_io_create()
     int                 insecure;
     u_int               block_size;
@@ -207,7 +272,13 @@ struct http_io_conf {
     log_func_t          *log;
 };
 
-/* CURL prepper functions */
+/* http_gio.c */
+extern struct cloudbacker_store *http_io_create(struct http_io_conf *config);
+extern void http_io_get_stats(struct cloudbacker_store *cb, struct http_io_stats *stats);
+extern int http_io_parse_block(struct http_io_conf *config, const char *name, cb_block_t *block_num);
+
+
+/* CURL prepper functions 
 typedef void http_io_curl_prepper_t(CURL *curl, struct http_io *io);
 
 void http_io_head_prepper(CURL *curl, struct http_io *io);
@@ -215,7 +286,7 @@ void http_io_read_prepper(CURL *curl, struct http_io *io);
 void http_io_write_prepper(CURL *curl, struct http_io *io);
 void http_io_list_prepper(CURL *curl, struct http_io *io);
 
-/* Generic http transport functionality */
+// Generic http transport functionality 
 int http_io_perform_io(struct http_io_private *priv, struct http_io *io, http_io_curl_prepper_t *prepper);
 
 size_t http_io_curl_reader(const void *ptr, size_t size, size_t nmemb, void *stream);
@@ -227,5 +298,5 @@ size_t http_io_curl_list_reader(const void *ptr, size_t size, size_t nmemb, void
 
 CURL *http_io_acquire_curl(struct http_io_private *priv, struct http_io *io);
 void http_io_release_curl(struct http_io_private *priv, CURL **curlp, int may_cache);
-
+*/
 #endif

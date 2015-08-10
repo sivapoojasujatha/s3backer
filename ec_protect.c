@@ -20,7 +20,7 @@
  * 02110-1301, USA.
  */
 
-#include "s3backer.h"
+#include "cloudbacker.h"
 #include "ec_protect.h"
 #include "block_part.h"
 #include "hash.h"
@@ -81,7 +81,7 @@
  * so the entries that will expire first are at the front of the list.
  */
 struct block_info {
-    s3b_block_t             block_num;          // block number - MUST BE FIRST
+    cb_block_t              block_num;          // block number - MUST BE FIRST
     uint64_t                timestamp;          // time PUT/DELETE completed (if WRITTEN)
     TAILQ_ENTRY(block_info) link;               // list entry link
     union {
@@ -93,9 +93,9 @@ struct block_info {
 /* Internal state */
 struct ec_protect_private {
     struct ec_protect_conf      *config;
-    struct s3backer_store       *inner;
+    struct cloudbacker_store    *inner;
     struct ec_protect_stats     stats;
-    struct s3b_hash             *hashtable;
+    struct cb_hash              *hashtable;
     u_int                       num_sleepers;   // count of sleeping threads
     TAILQ_HEAD(, block_info)    list;
     pthread_mutex_t             mutex;
@@ -110,23 +110,23 @@ struct cbinfo {
     void                        *arg;
 };
 
-/* s3backer_store functions */
-static int ec_protect_meta_data(struct s3backer_store *s3b, off_t *file_sizep, u_int *block_sizep, u_int *name_hashp);
-static int ec_protect_set_mounted(struct s3backer_store *s3b, int *old_valuep, int new_value);
-static int ec_protect_read_block(struct s3backer_store *s3b, s3b_block_t block_num, void *dest,
+/* cloudbacker_store functions */
+static int ec_protect_meta_data(struct cloudbacker_store *cb, off_t *file_sizep, u_int *block_sizep, u_int *name_hashp);
+static int ec_protect_set_mounted(struct cloudbacker_store *cb, int *old_valuep, int new_value);
+static int ec_protect_read_block(struct cloudbacker_store *cb, cb_block_t block_num, void *dest,
   u_char *actual_md5, const u_char *expect_md5, int strict);
-static int ec_protect_write_block(struct s3backer_store *s3b, s3b_block_t block_num, const void *src, u_char *md5,
+static int ec_protect_write_block(struct cloudbacker_store *cb, cb_block_t block_num, const void *src, u_char *md5,
   check_cancel_t *check_cancel, void *check_cancel_arg);
-static int ec_protect_read_block_part(struct s3backer_store *s3b, s3b_block_t block_num, u_int off, u_int len, void *dest);
-static int ec_protect_write_block_part(struct s3backer_store *s3b, s3b_block_t block_num, u_int off, u_int len, const void *src);
-static int ec_protect_flush(struct s3backer_store *s3b);
-static void ec_protect_destroy(struct s3backer_store *s3b);
+static int ec_protect_read_block_part(struct cloudbacker_store *cb, cb_block_t block_num, u_int off, u_int len, void *dest);
+static int ec_protect_write_block_part(struct cloudbacker_store *cb, cb_block_t block_num, u_int off, u_int len, const void *src);
+static int ec_protect_flush(struct cloudbacker_store *cb);
+static void ec_protect_destroy(struct cloudbacker_store *cb);
 
 /* Misc */
 static uint64_t ec_protect_sleep_until(struct ec_protect_private *priv, pthread_cond_t *cond, uint64_t wake_time_millis);
 static void ec_protect_scrub_expired_writtens(struct ec_protect_private *priv, uint64_t current_time);
 static uint64_t ec_protect_get_time(void);
-static int ec_protect_list_blocks(struct s3backer_store *s3b, block_list_func_t *callback, void *arg);
+static int ec_protect_list_blocks(struct cloudbacker_store *cb, block_list_func_t *callback, void *arg);
 static void ec_protect_dirty_callback(void *arg, void *value);
 static void ec_protect_free_one(void *arg, void *value);
 
@@ -148,28 +148,28 @@ static const u_char zero_md5[MD5_DIGEST_LENGTH];
  *
  * On error, returns NULL and sets `errno'.
  */
-struct s3backer_store *
-ec_protect_create(struct ec_protect_conf *config, struct s3backer_store *inner)
+struct cloudbacker_store *
+ec_protect_create(struct ec_protect_conf *config, struct cloudbacker_store *inner)
 {
-    struct s3backer_store *s3b;
+    struct cloudbacker_store *cb;
     struct ec_protect_private *priv;
     int r;
 
     /* Initialize structures */
-    if ((s3b = calloc(1, sizeof(*s3b))) == NULL) {
+    if ((cb = calloc(1, sizeof(*cb))) == NULL) {
         r = errno;
         (*config->log)(LOG_ERR, "calloc(): %s", strerror(r));
         goto fail0;
     }
-    s3b->meta_data = ec_protect_meta_data;
-    s3b->set_mounted = ec_protect_set_mounted;
-    s3b->read_block = ec_protect_read_block;
-    s3b->write_block = ec_protect_write_block;
-    s3b->read_block_part = ec_protect_read_block_part;
-    s3b->write_block_part = ec_protect_write_block_part;
-    s3b->list_blocks = ec_protect_list_blocks;
-    s3b->flush = ec_protect_flush;
-    s3b->destroy = ec_protect_destroy;
+    cb->meta_data = ec_protect_meta_data;
+    cb->set_mounted = ec_protect_set_mounted;
+    cb->read_block = ec_protect_read_block;
+    cb->write_block = ec_protect_write_block;
+    cb->read_block_part = ec_protect_read_block_part;
+    cb->write_block_part = ec_protect_write_block_part;
+    cb->list_blocks = ec_protect_list_blocks;
+    cb->flush = ec_protect_flush;
+    cb->destroy = ec_protect_destroy;
     if ((priv = calloc(1, sizeof(*priv))) == NULL) {
         r = errno;
         (*config->log)(LOG_ERR, "calloc(): %s", strerror(r));
@@ -186,13 +186,13 @@ ec_protect_create(struct ec_protect_conf *config, struct s3backer_store *inner)
     if ((r = pthread_cond_init(&priv->never_cond, NULL)) != 0)
         goto fail5;
     TAILQ_INIT(&priv->list);
-    if ((r = s3b_hash_create(&priv->hashtable, config->cache_size)) != 0)
+    if ((r = cb_hash_create(&priv->hashtable, config->cache_size)) != 0)
         goto fail6;
-    s3b->data = priv;
+    cb->data = priv;
 
     /* Done */
     EC_PROTECT_CHECK_INVARIANTS(priv);
-    return s3b;
+    return cb;
 
 fail6:
     pthread_cond_destroy(&priv->never_cond);
@@ -205,7 +205,7 @@ fail3:
 fail2:
     free(priv);
 fail1:
-    free(s3b);
+    free(cb);
 fail0:
     (*config->log)(LOG_ERR, "ec_protect creation failed: %s", strerror(r));
     errno = r;
@@ -213,25 +213,25 @@ fail0:
 }
 
 static int
-ec_protect_meta_data(struct s3backer_store *s3b, off_t *file_sizep, u_int *block_sizep, u_int *name_hashp)
+ec_protect_meta_data(struct cloudbacker_store *cb, off_t *file_sizep, u_int *block_sizep, u_int *name_hashp)
 {
-    struct ec_protect_private *const priv = s3b->data;
+    struct ec_protect_private *const priv = cb->data;
 
     return (*priv->inner->meta_data)(priv->inner, file_sizep, block_sizep, name_hashp);
 }
 
 static int
-ec_protect_set_mounted(struct s3backer_store *s3b, int *old_valuep, int new_value)
+ec_protect_set_mounted(struct cloudbacker_store *cb, int *old_valuep, int new_value)
 {
-    struct ec_protect_private *const priv = s3b->data;
+    struct ec_protect_private *const priv = cb->data;
 
     return (*priv->inner->set_mounted)(priv->inner, old_valuep, new_value);
 }
 
 static int
-ec_protect_flush(struct s3backer_store *const s3b)
+ec_protect_flush(struct cloudbacker_store *const cb)
 {
-    struct ec_protect_private *const priv = s3b->data;
+    struct ec_protect_private *const priv = cb->data;
 
     /* Grab lock and sanity check */
     pthread_mutex_lock(&priv->mutex);
@@ -247,9 +247,9 @@ ec_protect_flush(struct s3backer_store *const s3b)
 }
 
 static void
-ec_protect_destroy(struct s3backer_store *const s3b)
+ec_protect_destroy(struct cloudbacker_store *const cb)
 {
-    struct ec_protect_private *const priv = s3b->data;
+    struct ec_protect_private *const priv = cb->data;
 
     /* Grab lock and sanity check */
     pthread_mutex_lock(&priv->mutex);
@@ -267,27 +267,27 @@ ec_protect_destroy(struct s3backer_store *const s3b)
     pthread_cond_destroy(&priv->space_cond);
     pthread_cond_destroy(&priv->sleepers_cond);
     pthread_cond_destroy(&priv->never_cond);
-    s3b_hash_foreach(priv->hashtable, ec_protect_free_one, NULL);
-    s3b_hash_destroy(priv->hashtable);
+    cb_hash_foreach(priv->hashtable, ec_protect_free_one, NULL);
+    cb_hash_destroy(priv->hashtable);
     free(priv);
-    free(s3b);
+    free(cb);
 }
 
 void
-ec_protect_get_stats(struct s3backer_store *s3b, struct ec_protect_stats *stats)
+ec_protect_get_stats(struct cloudbacker_store *cb, struct ec_protect_stats *stats)
 {
-    struct ec_protect_private *const priv = s3b->data;
+    struct ec_protect_private *const priv = cb->data;
 
     pthread_mutex_lock(&priv->mutex);
     memcpy(stats, &priv->stats, sizeof(*stats));
-    stats->current_cache_size = s3b_hash_size(priv->hashtable);
+    stats->current_cache_size = cb_hash_size(priv->hashtable);
     pthread_mutex_unlock(&priv->mutex);
 }
 
 static int
-ec_protect_list_blocks(struct s3backer_store *s3b, block_list_func_t *callback, void *arg)
+ec_protect_list_blocks(struct cloudbacker_store *cb, block_list_func_t *callback, void *arg)
 {
-    struct ec_protect_private *const priv = s3b->data;
+    struct ec_protect_private *const priv = cb->data;
     struct cbinfo cbinfo;
     int r;
 
@@ -296,16 +296,16 @@ ec_protect_list_blocks(struct s3backer_store *s3b, block_list_func_t *callback, 
     cbinfo.callback = callback;
     cbinfo.arg = arg;
     pthread_mutex_lock(&priv->mutex);
-    s3b_hash_foreach(priv->hashtable, ec_protect_dirty_callback, &cbinfo);
+    cb_hash_foreach(priv->hashtable, ec_protect_dirty_callback, &cbinfo);
     pthread_mutex_unlock(&priv->mutex);
     return 0;
 }
 
 static int
-ec_protect_read_block(struct s3backer_store *const s3b, s3b_block_t block_num, void *dest,
+ec_protect_read_block(struct cloudbacker_store *const cb, cb_block_t block_num, void *dest,
   u_char *actual_md5, const u_char *expect_md5, int strict)
 {
-    struct ec_protect_private *const priv = s3b->data;
+    struct ec_protect_private *const priv = cb->data;
     struct ec_protect_conf *const config = priv->config;
     u_char md5[MD5_DIGEST_LENGTH];
     struct block_info *binfo;
@@ -322,7 +322,7 @@ ec_protect_read_block(struct s3backer_store *const s3b, s3b_block_t block_num, v
     ec_protect_scrub_expired_writtens(priv, ec_protect_get_time());
 
     /* Find info for this block */
-    if ((binfo = s3b_hash_get(priv->hashtable, block_num)) != NULL) {
+    if ((binfo = cb_hash_get(priv->hashtable, block_num)) != NULL) {
 
         /* In WRITING state: we have the data already! */
         if (binfo->timestamp == 0) {
@@ -365,10 +365,10 @@ ec_protect_read_block(struct s3backer_store *const s3b, s3b_block_t block_num, v
 }
 
 static int
-ec_protect_write_block(struct s3backer_store *const s3b, s3b_block_t block_num, const void *src, u_char *caller_md5,
+ec_protect_write_block(struct cloudbacker_store *const cb, cb_block_t block_num, const void *src, u_char *caller_md5,
   check_cancel_t *check_cancel, void *check_cancel_arg)
 {
-    struct ec_protect_private *const priv = s3b->data;
+    struct ec_protect_private *const priv = cb->data;
     struct ec_protect_conf *const config = priv->config;
     u_char md5[MD5_DIGEST_LENGTH];
     struct block_info *binfo;
@@ -392,13 +392,13 @@ again:
     ec_protect_scrub_expired_writtens(priv, current_time);
 
     /* Find info for this block */
-    binfo = s3b_hash_get(priv->hashtable, block_num);
+    binfo = cb_hash_get(priv->hashtable, block_num);
 
     /* CLEAN case: add new entry in state WRITING and write the block */
     if (binfo == NULL) {
 
         /* If we have reached max cache capacity, wait until there's more room */
-        if (s3b_hash_size(priv->hashtable) >= config->cache_size) {
+        if (cb_hash_size(priv->hashtable) >= config->cache_size) {
 
             /* Report deadlock situation */
             if (config->cache_time == 0)
@@ -423,7 +423,7 @@ again:
         }
         binfo->block_num = block_num;
         binfo->u.data = src;
-        s3b_hash_put_new(priv->hashtable, binfo);
+        cb_hash_put_new(priv->hashtable, binfo);
 
 writeit:
         /* Write the block */
@@ -434,7 +434,7 @@ writeit:
 
         /* If there was an error, just return it and forget */
         if (r != 0) {
-            s3b_hash_remove(priv->hashtable, block_num);
+            cb_hash_remove(priv->hashtable, block_num);
             pthread_cond_signal(&priv->space_cond);
             pthread_mutex_unlock(&priv->mutex);
             free(binfo);
@@ -491,21 +491,21 @@ writeit:
 }
 
 static int
-ec_protect_read_block_part(struct s3backer_store *s3b, s3b_block_t block_num, u_int off, u_int len, void *dest)
+ec_protect_read_block_part(struct cloudbacker_store *cb, cb_block_t block_num, u_int off, u_int len, void *dest)
 {
-    struct ec_protect_private *const priv = s3b->data;
+    struct ec_protect_private *const priv = cb->data;
     struct ec_protect_conf *const config = priv->config;
 
-    return block_part_read_block_part(s3b, block_num, config->block_size, off, len, dest);
+    return block_part_read_block_part(cb, block_num, config->block_size, off, len, dest);
 }
 
 static int
-ec_protect_write_block_part(struct s3backer_store *s3b, s3b_block_t block_num, u_int off, u_int len, const void *src)
+ec_protect_write_block_part(struct cloudbacker_store *cb, cb_block_t block_num, u_int off, u_int len, const void *src)
 {
-    struct ec_protect_private *const priv = s3b->data;
+    struct ec_protect_private *const priv = cb->data;
     struct ec_protect_conf *const config = priv->config;
 
-    return block_part_write_block_part(s3b, block_num, config->block_size, off, len, src);
+    return block_part_write_block_part(cb, block_num, config->block_size, off, len, src);
 }
 
 /*
@@ -534,7 +534,7 @@ ec_protect_scrub_expired_writtens(struct ec_protect_private *priv, uint64_t curr
     if (config->cache_time > 0) {
         while ((binfo = TAILQ_FIRST(&priv->list)) != NULL && current_time >= binfo->timestamp + config->cache_time) {
             TAILQ_REMOVE(&priv->list, binfo, link);
-            s3b_hash_remove(priv->hashtable, binfo->block_num);
+            cb_hash_remove(priv->hashtable, binfo->block_num);
             free(binfo);
             num_removed++;
         }
@@ -634,12 +634,12 @@ ec_protect_check_invariants(struct ec_protect_private *priv)
     memset(&info, 0, sizeof(info));
     for (binfo = TAILQ_FIRST(&priv->list); binfo != NULL; binfo = TAILQ_NEXT(binfo, link)) {
         assert(binfo->timestamp != 0);
-        assert(s3b_hash_get(priv->hashtable, binfo->block_num) == binfo);
+        assert(cb_hash_get(priv->hashtable, binfo->block_num) == binfo);
         info.num_in_list++;
     }
-    s3b_hash_foreach(priv->hashtable, ec_protect_check_one, &info);
+    cb_hash_foreach(priv->hashtable, ec_protect_check_one, &info);
     assert(info.written == info.num_in_list);
-    assert(info.written + info.writing == s3b_hash_size(priv->hashtable));
+    assert(info.written + info.writing == cb_hash_size(priv->hashtable));
 }
 #endif
 

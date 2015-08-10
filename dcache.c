@@ -20,7 +20,7 @@
  * 02110-1301, USA.
  */
 
-#include "s3backer.h"
+#include "cloudbacker.h"
 #include "dcache.h"
 
 /*
@@ -58,7 +58,7 @@ struct file_header {
     uint32_t                        signature;
     uint32_t                        header_size;
     uint32_t                        u_int_size;
-    uint32_t                        s3b_block_t_size;
+    uint32_t                        cb_block_t_size;
     uint32_t                        block_size;
     uint32_t                        data_align;
     uint32_t                        zero;
@@ -67,12 +67,12 @@ struct file_header {
 
 /* One directory entry */
 struct dir_entry {
-    s3b_block_t                     block_num;
+    cb_block_t                      block_num;
     u_char                          md5[MD5_DIGEST_LENGTH];
 } __attribute__ ((packed));
 
 /* Private structure */
-struct s3b_dcache {
+struct cb_dcache {
     int                             fd;
     log_func_t                      *log;
     char                            *filename;
@@ -83,24 +83,24 @@ struct s3b_dcache {
     off_t                           data;
     u_int                           free_list_len;
     u_int                           free_list_alloc;
-    s3b_block_t                     *free_list;
+    cb_block_t                      *free_list;
 };
 
 /* Internal functions */
-static int s3b_dcache_write_entry(struct s3b_dcache *priv, u_int dslot, const struct dir_entry *entry);
+static int cb_dcache_write_entry(struct cb_dcache *priv, u_int dslot, const struct dir_entry *entry);
 #ifndef NDEBUG
-static int s3b_dcache_entry_is_empty(struct s3b_dcache *priv, u_int dslot);
-static int s3b_dcache_read_entry(struct s3b_dcache *priv, u_int dslot, struct dir_entry *entryp);
+static int cb_dcache_entry_is_empty(struct cb_dcache *priv, u_int dslot);
+static int cb_dcache_read_entry(struct cb_dcache *priv, u_int dslot, struct dir_entry *entryp);
 #endif
-static int s3b_dcache_create_file(struct s3b_dcache *priv, int *fdp, const char *filename, u_int max_blocks,
+static int cb_dcache_create_file(struct cb_dcache *priv, int *fdp, const char *filename, u_int max_blocks,
             struct file_header *headerp);
-static int s3b_dcache_resize_file(struct s3b_dcache *priv, const struct file_header *header);
-static int s3b_dcache_init_free_list(struct s3b_dcache *priv, s3b_dcache_visit_t *visitor, void *arg);
-static int s3b_dcache_push(struct s3b_dcache *priv, u_int dslot);
-static void s3b_dcache_pop(struct s3b_dcache *priv, u_int *dslotp);
-static int s3b_dcache_read(struct s3b_dcache *priv, off_t offset, void *data, size_t len);
-static int s3b_dcache_write(struct s3b_dcache *priv, off_t offset, const void *data, size_t len);
-static int s3b_dcache_write2(struct s3b_dcache *priv, int fd, const char *filename, off_t offset, const void *data, size_t len);
+static int cb_dcache_resize_file(struct cb_dcache *priv, const struct file_header *header);
+static int cb_dcache_init_free_list(struct cb_dcache *priv, cb_dcache_visit_t *visitor, void *arg);
+static int cb_dcache_push(struct cb_dcache *priv, u_int dslot);
+static void cb_dcache_pop(struct cb_dcache *priv, u_int *dslotp);
+static int cb_dcache_read(struct cb_dcache *priv, off_t offset, void *data, size_t len);
+static int cb_dcache_write(struct cb_dcache *priv, off_t offset, const void *data, size_t len);
+static int cb_dcache_write2(struct cb_dcache *priv, int fd, const char *filename, off_t offset, const void *data, size_t len);
 
 /* Internal variables */
 static const struct dir_entry zero_entry;
@@ -108,11 +108,11 @@ static const struct dir_entry zero_entry;
 /* Public functions */
 
 int
-s3b_dcache_open(struct s3b_dcache **dcachep, log_func_t *log, const char *filename,
-  u_int block_size, u_int max_blocks, s3b_dcache_visit_t *visitor, void *arg)
+cb_dcache_open(struct cb_dcache **dcachep, log_func_t *log, const char *filename,
+  u_int block_size, u_int max_blocks, cb_dcache_visit_t *visitor, void *arg)
 {
     struct file_header header;
-    struct s3b_dcache *priv;
+    struct cb_dcache *priv;
     struct stat sb;
     int r;
 
@@ -140,7 +140,7 @@ s3b_dcache_open(struct s3b_dcache **dcachep, log_func_t *log, const char *filena
     /* Create cache file if it doesn't already exist */
     if (stat(priv->filename, &sb) == -1 && errno == ENOENT) {
         (*priv->log)(LOG_NOTICE, "creating new cache file `%s' with capacity %u blocks", priv->filename, priv->max_blocks);
-        if ((r = s3b_dcache_create_file(priv, &priv->fd, priv->filename, priv->max_blocks, NULL)) != 0)
+        if ((r = cb_dcache_create_file(priv, &priv->fd, priv->filename, priv->max_blocks, NULL)) != 0)
             goto fail3;
         (void)close(priv->fd);
         priv->fd = -1;
@@ -168,7 +168,7 @@ retry:
         r = EINVAL;
         goto fail4;
     }
-    if ((r = s3b_dcache_read(priv, (off_t)0, &header, sizeof(header))) != 0) {
+    if ((r = cb_dcache_read(priv, (off_t)0, &header, sizeof(header))) != 0) {
         (*priv->log)(LOG_ERR, "can't read cache file `%s' header: %s", priv->filename, strerror(r));
         goto fail4;
     }
@@ -189,9 +189,9 @@ retry:
           priv->filename, header.u_int_size, (u_int)sizeof(u_int));
         goto fail4;
     }
-    if (header.s3b_block_t_size != sizeof(s3b_block_t)) {
-        (*priv->log)(LOG_ERR, "invalid cache file `%s': created with sizeof(s3b_block_t) %u != %u",
-          priv->filename, header.s3b_block_t_size, (u_int)sizeof(s3b_block_t));
+    if (header.cb_block_t_size != sizeof(cb_block_t)) {
+        (*priv->log)(LOG_ERR, "invalid cache file `%s': created with sizeof(cb_block_t) %u != %u",
+          priv->filename, header.cb_block_t_size, (u_int)sizeof(cb_block_t));
         goto fail4;
     }
     if (header.block_size != priv->block_size) {
@@ -214,7 +214,7 @@ retry:
         (*priv->log)(LOG_NOTICE, "cache file `%s' was created with capacity %u != %u blocks, automatically %s",
           priv->filename, header.max_blocks, priv->max_blocks, header.max_blocks < priv->max_blocks ?
            "expanding" : "shrinking");
-        if ((r = s3b_dcache_resize_file(priv, &header)) != 0)
+        if ((r = cb_dcache_resize_file(priv, &header)) != 0)
             goto fail4;
         (*priv->log)(LOG_INFO, "successfully resized cache file `%s' from %u to %u blocks",
           priv->filename, header.max_blocks, priv->max_blocks);
@@ -232,7 +232,7 @@ retry:
     priv->data = ROUNDUP2(DIR_OFFSET(priv->max_blocks), header.data_align);
 
     /* Read the directory to build the free list and visit allocated blocks */
-    if ((r = s3b_dcache_init_free_list(priv, visitor, arg)) != 0)
+    if ((r = cb_dcache_init_free_list(priv, visitor, arg)) != 0)
         goto fail4;
 
     /* Done */
@@ -252,7 +252,7 @@ fail1:
 }
 
 void
-s3b_dcache_close(struct s3b_dcache *priv)
+cb_dcache_close(struct cb_dcache *priv)
 {
     close(priv->fd);
     free(priv->zero_block);
@@ -262,27 +262,27 @@ s3b_dcache_close(struct s3b_dcache *priv)
 }
 
 u_int
-s3b_dcache_size(struct s3b_dcache *priv)
+cb_dcache_size(struct cb_dcache *priv)
 {
     return priv->num_alloc;
 }
 
 /*
  * Allocate a dslot for a block's data. We don't record this block in the directory yet;
- * that is done by s3b_dcache_record_block().
+ * that is done by cb_dcache_record_block().
  */
 int
-s3b_dcache_alloc_block(struct s3b_dcache *priv, u_int *dslotp)
+cb_dcache_alloc_block(struct cb_dcache *priv, u_int *dslotp)
 {
     /* Any free dslots? */
     if (priv->free_list_len == 0)
         return ENOMEM;
 
     /* Pop off the next free dslot */
-    s3b_dcache_pop(priv, dslotp);
+    cb_dcache_pop(priv, dslotp);
 
     /* Directory entry should be empty */
-    assert(s3b_dcache_entry_is_empty(priv, *dslotp));
+    assert(cb_dcache_entry_is_empty(priv, *dslotp));
 
     /* Done */
     priv->num_alloc++;
@@ -298,7 +298,7 @@ s3b_dcache_alloc_block(struct s3b_dcache *priv, u_int *dslotp)
  * There MUST NOT be a directory entry for the block.
  */
 int
-s3b_dcache_record_block(struct s3b_dcache *priv, u_int dslot, s3b_block_t block_num, const u_char *md5)
+cb_dcache_record_block(struct cb_dcache *priv, u_int dslot, cb_block_t block_num, const u_char *md5)
 {
     struct dir_entry entry;
     int r;
@@ -307,16 +307,16 @@ s3b_dcache_record_block(struct s3b_dcache *priv, u_int dslot, s3b_block_t block_
     assert(dslot < priv->max_blocks);
 
     /* Directory entry should be empty */
-    assert(s3b_dcache_entry_is_empty(priv, dslot));
+    assert(cb_dcache_entry_is_empty(priv, dslot));
 
     /* Make sure any new data is written to disk before updating the directory */
-    if ((r = s3b_dcache_fsync(priv)) != 0)
+    if ((r = cb_dcache_fsync(priv)) != 0)
         return r;
 
     /* Update directory */
     entry.block_num = block_num;
     memcpy(&entry.md5, md5, MD5_DIGEST_LENGTH);
-    if ((r = s3b_dcache_write_entry(priv, dslot, &entry)) != 0)
+    if ((r = cb_dcache_write_entry(priv, dslot, &entry)) != 0)
         return r;
 
     /* Done */
@@ -332,7 +332,7 @@ s3b_dcache_record_block(struct s3b_dcache *priv, u_int dslot, s3b_block_t block_
  * There MUST be a directory entry for the block.
  */
 int
-s3b_dcache_erase_block(struct s3b_dcache *priv, u_int dslot)
+cb_dcache_erase_block(struct cb_dcache *priv, u_int dslot)
 {
     int r;
 
@@ -340,11 +340,11 @@ s3b_dcache_erase_block(struct s3b_dcache *priv, u_int dslot)
     assert(dslot < priv->max_blocks);
 
     /* Update directory */
-    if ((r = s3b_dcache_write_entry(priv, dslot, &zero_entry)) != 0)
+    if ((r = cb_dcache_write_entry(priv, dslot, &zero_entry)) != 0)
         return r;
 
     /* Make sure directory entry is written to disk before any new data is written */
-    if ((r = s3b_dcache_fsync(priv)) != 0)
+    if ((r = cb_dcache_fsync(priv)) != 0)
         return r;
 
     /* Done */
@@ -357,7 +357,7 @@ s3b_dcache_erase_block(struct s3b_dcache *priv, u_int dslot)
  * There MUST NOT be a directory entry for the block.
  */
 int
-s3b_dcache_free_block(struct s3b_dcache *priv, u_int dslot)
+cb_dcache_free_block(struct cb_dcache *priv, u_int dslot)
 {
     int r;
 
@@ -365,10 +365,10 @@ s3b_dcache_free_block(struct s3b_dcache *priv, u_int dslot)
     assert(dslot < priv->max_blocks);
 
     /* Directory entry should be empty */
-    assert(s3b_dcache_entry_is_empty(priv, dslot));
+    assert(cb_dcache_entry_is_empty(priv, dslot));
 
     /* Push dslot onto free list */
-    if ((r = s3b_dcache_push(priv, dslot)) != 0)
+    if ((r = cb_dcache_push(priv, dslot)) != 0)
         return r;
 
     /* Done */
@@ -380,7 +380,7 @@ s3b_dcache_free_block(struct s3b_dcache *priv, u_int dslot)
  * Read data from one dslot.
  */
 int
-s3b_dcache_read_block(struct s3b_dcache *priv, u_int dslot, void *dest, u_int off, u_int len)
+cb_dcache_read_block(struct cb_dcache *priv, u_int dslot, void *dest, u_int off, u_int len)
 {
     /* Sanity check */
     assert(dslot < priv->max_blocks);
@@ -389,14 +389,14 @@ s3b_dcache_read_block(struct s3b_dcache *priv, u_int dslot, void *dest, u_int of
     assert(off + len <= priv->block_size);
 
     /* Read data */
-    return s3b_dcache_read(priv, DATA_OFFSET(priv, dslot) + off, dest, len);
+    return cb_dcache_read(priv, DATA_OFFSET(priv, dslot) + off, dest, len);
 }
 
 /*
  * Write data into one dslot.
  */
 int
-s3b_dcache_write_block(struct s3b_dcache *priv, u_int dslot, const void *src, u_int off, u_int len)
+cb_dcache_write_block(struct cb_dcache *priv, u_int dslot, const void *src, u_int off, u_int len)
 {
     /* Sanity check */
     assert(dslot < priv->max_blocks);
@@ -405,14 +405,14 @@ s3b_dcache_write_block(struct s3b_dcache *priv, u_int dslot, const void *src, u_
     assert(off + len <= priv->block_size);
 
     /* Write data */
-    return s3b_dcache_write(priv, DATA_OFFSET(priv, dslot) + off, src != NULL ? src : priv->zero_block, len);
+    return cb_dcache_write(priv, DATA_OFFSET(priv, dslot) + off, src != NULL ? src : priv->zero_block, len);
 }
 
 /*
  * Synchronize outstanding changes to persistent storage.
  */
 int
-s3b_dcache_fsync(struct s3b_dcache *priv)
+cb_dcache_fsync(struct cb_dcache *priv)
 {
     int r;
 
@@ -432,19 +432,19 @@ s3b_dcache_fsync(struct s3b_dcache *priv)
 
 #ifndef NDEBUG
 static int
-s3b_dcache_entry_is_empty(struct s3b_dcache *priv, u_int dslot)
+cb_dcache_entry_is_empty(struct cb_dcache *priv, u_int dslot)
 {
     struct dir_entry entry;
 
-    (void)s3b_dcache_read_entry(priv, dslot, &entry);
+    (void)cb_dcache_read_entry(priv, dslot, &entry);
     return memcmp(&entry, &zero_entry, sizeof(entry)) == 0;
 }
 
 static int
-s3b_dcache_read_entry(struct s3b_dcache *priv, u_int dslot, struct dir_entry *entry)
+cb_dcache_read_entry(struct cb_dcache *priv, u_int dslot, struct dir_entry *entry)
 {
     assert(dslot < priv->max_blocks);
-    return s3b_dcache_read(priv, DIR_OFFSET(dslot), entry, sizeof(*entry));
+    return cb_dcache_read(priv, DIR_OFFSET(dslot), entry, sizeof(*entry));
 }
 #endif
 
@@ -452,10 +452,10 @@ s3b_dcache_read_entry(struct s3b_dcache *priv, u_int dslot, struct dir_entry *en
  * Write a directory entry.
  */
 static int
-s3b_dcache_write_entry(struct s3b_dcache *priv, u_int dslot, const struct dir_entry *entry)
+cb_dcache_write_entry(struct cb_dcache *priv, u_int dslot, const struct dir_entry *entry)
 {
     assert(dslot < priv->max_blocks);
-    return s3b_dcache_write(priv, DIR_OFFSET(dslot), entry, sizeof(*entry));
+    return cb_dcache_write(priv, DIR_OFFSET(dslot), entry, sizeof(*entry));
 }
 
 /*
@@ -463,7 +463,7 @@ s3b_dcache_write_entry(struct s3b_dcache *priv, u_int dslot, const struct dir_en
  * and the cache file must be re-opened.
  */
 static int
-s3b_dcache_resize_file(struct s3b_dcache *priv, const struct file_header *old_header)
+cb_dcache_resize_file(struct cb_dcache *priv, const struct file_header *old_header)
 {
     const u_int old_max_blocks = old_header->max_blocks;
     const u_int new_max_blocks = priv->max_blocks;
@@ -485,7 +485,7 @@ s3b_dcache_resize_file(struct s3b_dcache *priv, const struct file_header *old_he
         (*priv->log)(LOG_ERR, "can't allocate string: %s", strerror(r));
         goto fail;
     }
-    if ((r = s3b_dcache_create_file(priv, &new_fd, tempfile, new_max_blocks, &new_header)) != 0)
+    if ((r = cb_dcache_create_file(priv, &new_fd, tempfile, new_max_blocks, &new_header)) != 0)
         goto fail;
 
     /* Allocate block data buffer */
@@ -506,7 +506,7 @@ s3b_dcache_resize_file(struct s3b_dcache *priv, const struct file_header *old_he
         num_entries = old_max_blocks - base_old_dslot;
         if (num_entries > DIRECTORY_READ_CHUNK)
             num_entries = DIRECTORY_READ_CHUNK;
-        if ((r = s3b_dcache_read(priv, DIR_OFFSET(base_old_dslot), entries, num_entries * sizeof(*entries))) != 0) {
+        if ((r = cb_dcache_read(priv, DIR_OFFSET(base_old_dslot), entries, num_entries * sizeof(*entries))) != 0) {
             (*priv->log)(LOG_ERR, "error reading cache file `%s' directory: %s", priv->filename, strerror(r));
             goto fail;
         }
@@ -530,15 +530,15 @@ s3b_dcache_resize_file(struct s3b_dcache *priv, const struct file_header *old_he
             }
 
             /* Copy the directory entry */
-            if ((r = s3b_dcache_write2(priv, new_fd, tempfile, DIR_OFFSET(new_dslot), entry, sizeof(*entry))) != 0)
+            if ((r = cb_dcache_write2(priv, new_fd, tempfile, DIR_OFFSET(new_dslot), entry, sizeof(*entry))) != 0)
                 goto fail;
 
             /* Copy the data block */
             old_data = old_data_base + (off_t)old_dslot * priv->block_size;
             new_data = new_data_base + (off_t)new_dslot * priv->block_size;
-            if ((r = s3b_dcache_read(priv, old_data, block_buf, priv->block_size)) != 0)
+            if ((r = cb_dcache_read(priv, old_data, block_buf, priv->block_size)) != 0)
                 goto fail;
-            if ((r = s3b_dcache_write2(priv, new_fd, tempfile, new_data, block_buf, priv->block_size)) != 0)
+            if ((r = cb_dcache_write2(priv, new_fd, tempfile, new_data, block_buf, priv->block_size)) != 0)
                 goto fail;
 
             /* Advance to the next slot */
@@ -582,7 +582,7 @@ fail:
 }
 
 static int
-s3b_dcache_create_file(struct s3b_dcache *priv, int *fdp, const char *filename, u_int max_blocks, struct file_header *headerp)
+cb_dcache_create_file(struct cb_dcache *priv, int *fdp, const char *filename, u_int max_blocks, struct file_header *headerp)
 {
     struct file_header header;
     int r;
@@ -592,7 +592,7 @@ s3b_dcache_create_file(struct s3b_dcache *priv, int *fdp, const char *filename, 
     header.signature = DCACHE_SIGNATURE;
     header.header_size = sizeof(header);
     header.u_int_size = sizeof(u_int);
-    header.s3b_block_t_size = sizeof(s3b_block_t);
+    header.cb_block_t_size = sizeof(cb_block_t);
     header.block_size = priv->block_size;
     header.max_blocks = priv->max_blocks;
     header.data_align = getpagesize();
@@ -605,7 +605,7 @@ s3b_dcache_create_file(struct s3b_dcache *priv, int *fdp, const char *filename, 
     }
 
     /* Write header */
-    if ((r = s3b_dcache_write2(priv, *fdp, filename, (off_t)0, &header, sizeof(header))) != 0) {
+    if ((r = cb_dcache_write2(priv, *fdp, filename, (off_t)0, &header, sizeof(header))) != 0) {
         (*priv->log)(LOG_ERR, "error initializing cache file `%s': %s", filename, strerror(r));
         goto fail;
     }
@@ -630,7 +630,7 @@ fail:
 }
 
 static int
-s3b_dcache_init_free_list(struct s3b_dcache *priv, s3b_dcache_visit_t *visitor, void *arg)
+cb_dcache_init_free_list(struct cb_dcache *priv, cb_dcache_visit_t *visitor, void *arg)
 {
     off_t required_size;
     struct stat sb;
@@ -651,7 +651,7 @@ s3b_dcache_init_free_list(struct s3b_dcache *priv, s3b_dcache_visit_t *visitor, 
         num_entries = priv->max_blocks - base_dslot;
         if (num_entries > DIRECTORY_READ_CHUNK)
             num_entries = DIRECTORY_READ_CHUNK;
-        if ((r = s3b_dcache_read(priv, DIR_OFFSET(base_dslot), entries, num_entries * sizeof(*entries))) != 0) {
+        if ((r = cb_dcache_read(priv, DIR_OFFSET(base_dslot), entries, num_entries * sizeof(*entries))) != 0) {
             (*priv->log)(LOG_ERR, "error reading cache file `%s' directory: %s", priv->filename, strerror(r));
             return r;
         }
@@ -662,7 +662,7 @@ s3b_dcache_init_free_list(struct s3b_dcache *priv, s3b_dcache_visit_t *visitor, 
             const u_int dslot = base_dslot + i;
 
             if (memcmp(entry, &zero_entry, sizeof(*entry)) == 0) {
-                if ((r = s3b_dcache_push(priv, dslot)) != 0)
+                if ((r = cb_dcache_push(priv, dslot)) != 0)
                     return r;
             } else {
                 if (dslot + 1 > num_dslots_used)                    /* keep track of the number of dslots in use */
@@ -675,7 +675,7 @@ s3b_dcache_init_free_list(struct s3b_dcache *priv, s3b_dcache_visit_t *visitor, 
 
     /* Reverse the free list so we allocate lower numbered slots first */
     for (i = 0; i < priv->free_list_len / 2; i++) {
-        const s3b_block_t temp = priv->free_list[i];
+        const cb_block_t temp = priv->free_list[i];
 
         priv->free_list[i] = priv->free_list[priv->free_list_len - i - 1];
         priv->free_list[priv->free_list_len - i - 1] = temp;
@@ -718,7 +718,7 @@ s3b_dcache_init_free_list(struct s3b_dcache *priv, s3b_dcache_visit_t *visitor, 
  * Push a dslot onto the free list.
  */
 static int
-s3b_dcache_push(struct s3b_dcache *priv, u_int dslot)
+cb_dcache_push(struct cb_dcache *priv, u_int dslot)
 {
     /* Sanity check */
     assert(dslot < priv->max_blocks);
@@ -726,8 +726,8 @@ s3b_dcache_push(struct s3b_dcache *priv, u_int dslot)
 
     /* Grow the free list array if necessary */
     if (priv->free_list_alloc == priv->free_list_len) {
-        s3b_block_t *new_free_list;
-        s3b_block_t new_free_list_alloc;
+        cb_block_t *new_free_list;
+        cb_block_t new_free_list_alloc;
         int r;
 
         new_free_list_alloc = priv->free_list_alloc == 0 ? 1024 : 2 * priv->free_list_alloc;
@@ -750,7 +750,7 @@ s3b_dcache_push(struct s3b_dcache *priv, u_int dslot)
  * Pop the next dslot off of the free list. There must be one.
  */
 static void
-s3b_dcache_pop(struct s3b_dcache *priv, u_int *dslotp)
+cb_dcache_pop(struct cb_dcache *priv, u_int *dslotp)
 {
     /* Sanity check */
     assert(priv->free_list_len > 0);
@@ -761,8 +761,8 @@ s3b_dcache_pop(struct s3b_dcache *priv, u_int *dslotp)
 
     /* See if we can give back some memory */
     if (priv->free_list_alloc > 1024 && priv->free_list_len <= priv->free_list_alloc / 4) {
-        s3b_block_t *new_free_list;
-        s3b_block_t new_free_list_alloc;
+        cb_block_t *new_free_list;
+        cb_block_t new_free_list_alloc;
 
         new_free_list_alloc = priv->free_list_alloc / 4;
         if ((new_free_list = realloc(priv->free_list, new_free_list_alloc * sizeof(*new_free_list))) == NULL)
@@ -776,7 +776,7 @@ s3b_dcache_pop(struct s3b_dcache *priv, u_int *dslotp)
 }
 
 static int
-s3b_dcache_read(struct s3b_dcache *priv, off_t offset, void *data, size_t len)
+cb_dcache_read(struct cb_dcache *priv, off_t offset, void *data, size_t len)
 {
     size_t sofar;
     ssize_t r;
@@ -799,13 +799,13 @@ s3b_dcache_read(struct s3b_dcache *priv, off_t offset, void *data, size_t len)
 }
 
 static int
-s3b_dcache_write(struct s3b_dcache *priv, off_t offset, const void *data, size_t len)
+cb_dcache_write(struct cb_dcache *priv, off_t offset, const void *data, size_t len)
 {
-    return s3b_dcache_write2(priv, priv->fd, priv->filename, offset, data, len);
+    return cb_dcache_write2(priv, priv->fd, priv->filename, offset, data, len);
 }
 
 static int
-s3b_dcache_write2(struct s3b_dcache *priv, int fd, const char *filename, off_t offset, const void *data, size_t len)
+cb_dcache_write2(struct cb_dcache *priv, int fd, const char *filename, off_t offset, const void *data, size_t len)
 {
     size_t sofar;
     ssize_t r;

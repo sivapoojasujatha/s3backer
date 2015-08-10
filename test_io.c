@@ -20,7 +20,7 @@
  * 02110-1301, USA.
  */
 
-#include "s3backer.h"
+#include "cloudbacker.h"
 #include "s3b_http_io.h"
 #include "block_part.h"
 #include "test_io.h"
@@ -34,65 +34,65 @@ struct test_io_private {
     u_char                      zero_block[0];
 };
 
-/* s3backer_store functions */
-static int test_io_meta_data(struct s3backer_store *s3b, off_t *file_sizep, u_int *block_sizep, u_int *name_hashp);
-static int test_io_set_mounted(struct s3backer_store *s3b, int *old_valuep, int new_value);
-static int test_io_read_block(struct s3backer_store *s3b, s3b_block_t block_num, void *dest,
+/* cloudbacker_store functions */
+static int test_io_meta_data(struct cloudbacker_store *cb, off_t *file_sizep, u_int *block_sizep, u_int *name_hashp);
+static int test_io_set_mounted(struct cloudbacker_store *cb, int *old_valuep, int new_value);
+static int test_io_read_block(struct cloudbacker_store *cb, cb_block_t block_num, void *dest,
   u_char *actual_md5, const u_char *expect_md5, int strict);
-static int test_io_write_block(struct s3backer_store *s3b, s3b_block_t block_num, const void *src, u_char *md5,
+static int test_io_write_block(struct cloudbacker_store *cb, cb_block_t block_num, const void *src, u_char *md5,
   check_cancel_t *check_cancel, void *check_cancel_arg);
-static int test_io_read_block_part(struct s3backer_store *s3b, s3b_block_t block_num, u_int off, u_int len, void *dest);
-static int test_io_write_block_part(struct s3backer_store *s3b, s3b_block_t block_num, u_int off, u_int len, const void *src);
-static int test_io_list_blocks(struct s3backer_store *s3b, block_list_func_t *callback, void *arg);
-static int test_io_flush(struct s3backer_store *s3b);
-static void test_io_destroy(struct s3backer_store *s3b);
+static int test_io_read_block_part(struct cloudbacker_store *cb, cb_block_t block_num, u_int off, u_int len, void *dest);
+static int test_io_write_block_part(struct cloudbacker_store *cb, cb_block_t block_num, u_int off, u_int len, const void *src);
+static int test_io_list_blocks(struct cloudbacker_store *cb, block_list_func_t *callback, void *arg);
+static int test_io_flush(struct cloudbacker_store *cb);
+static void test_io_destroy(struct cloudbacker_store *cb);
 
 /*
  * Constructor
  *
  * On error, returns NULL and sets `errno'.
  */
-struct s3backer_store *
+struct cloudbacker_store *
 test_io_create(struct http_io_conf *config)
 {
-    struct s3backer_store *s3b;
+    struct cloudbacker_store *cb;
     struct test_io_private *priv;
 
     /* Initialize structures */
-    if ((s3b = calloc(1, sizeof(*s3b))) == NULL)
+    if ((cb = calloc(1, sizeof(*cb))) == NULL)
         return NULL;
-    s3b->meta_data = test_io_meta_data;
-    s3b->set_mounted = test_io_set_mounted;
-    s3b->read_block = test_io_read_block;
-    s3b->write_block = test_io_write_block;
-    s3b->read_block_part = test_io_read_block_part;
-    s3b->write_block_part = test_io_write_block_part;
-    s3b->list_blocks = test_io_list_blocks;
-    s3b->flush = test_io_flush;
-    s3b->destroy = test_io_destroy;
+    cb->meta_data = test_io_meta_data;
+    cb->set_mounted = test_io_set_mounted;
+    cb->read_block = test_io_read_block;
+    cb->write_block = test_io_write_block;
+    cb->read_block_part = test_io_read_block_part;
+    cb->write_block_part = test_io_write_block_part;
+    cb->list_blocks = test_io_list_blocks;
+    cb->flush = test_io_flush;
+    cb->destroy = test_io_destroy;
     if ((priv = calloc(1, sizeof(*priv) + config->block_size)) == NULL) {
-        free(s3b);
+        free(cb);
         errno = ENOMEM;
         return NULL;
     }
     priv->config = config;
-    s3b->data = priv;
+    cb->data = priv;
 
     /* Random initialization */
     srandom((u_int)time(NULL));
 
     /* Done */
-    return s3b;
+    return cb;
 }
 
 static int
-test_io_meta_data(struct s3backer_store *s3b, off_t *file_sizep, u_int *block_sizep, uint *name_hashp)
+test_io_meta_data(struct cloudbacker_store *cb, off_t *file_sizep, u_int *block_sizep, uint *name_hashp)
 {
     return 0;
 }
 
 static int
-test_io_set_mounted(struct s3backer_store *s3b, int *old_valuep, int new_value)
+test_io_set_mounted(struct cloudbacker_store *cb, int *old_valuep, int new_value)
 {
     if (old_valuep != NULL)
         *old_valuep = 0;
@@ -100,25 +100,25 @@ test_io_set_mounted(struct s3backer_store *s3b, int *old_valuep, int new_value)
 }
 
 static int
-test_io_flush(struct s3backer_store *const s3b)
+test_io_flush(struct cloudbacker_store *const cb)
 {
     return 0;
 }
 
 static void
-test_io_destroy(struct s3backer_store *const s3b)
+test_io_destroy(struct cloudbacker_store *const cb)
 {
-    struct test_io_private *const priv = s3b->data;
+    struct test_io_private *const priv = cb->data;
 
     free(priv);
-    free(s3b);
+    free(cb);
 }
 
 static int
-test_io_read_block(struct s3backer_store *const s3b, s3b_block_t block_num, void *dest,
+test_io_read_block(struct cloudbacker_store *const cb, cb_block_t block_num, void *dest,
   u_char *actual_md5, const u_char *expect_md5, int strict)
 {
-    struct test_io_private *const priv = s3b->data;
+    struct test_io_private *const priv = cb->data;
     struct http_io_conf *const config = priv->config;
     u_char md5[MD5_DIGEST_LENGTH];
     char path[PATH_MAX];
@@ -129,19 +129,19 @@ test_io_read_block(struct s3backer_store *const s3b, s3b_block_t block_num, void
 
     /* Logging */
     if (config->debug)
-        (*config->log)(LOG_DEBUG, "test_io: read %0*jx started", S3B_BLOCK_NUM_DIGITS, (uintmax_t)block_num);
+        (*config->log)(LOG_DEBUG, "test_io: read %0*jx started", CB_BLOCK_NUM_DIGITS, (uintmax_t)block_num);
 
     /* Random delay */
     usleep((random() % 200) * 1000);
 
     /* Random error */
     if ((random() % 100) < RANDOM_ERROR_PERCENT) {
-        (*config->log)(LOG_ERR, "test_io: random failure reading %0*jx", S3B_BLOCK_NUM_DIGITS, (uintmax_t)block_num);
+        (*config->log)(LOG_ERR, "test_io: random failure reading %0*jx", CB_BLOCK_NUM_DIGITS, (uintmax_t)block_num);
         return EAGAIN;
     }
 
     /* Generate path */
-    snprintf(path, sizeof(path), "%s/%s%0*jx", config->bucket, config->prefix, S3B_BLOCK_NUM_DIGITS, (uintmax_t)block_num);
+    snprintf(path, sizeof(path), "%s/%s%0*jx", config->bucket, config->prefix, CB_BLOCK_NUM_DIGITS, (uintmax_t)block_num);
 
     /* Read block */
     if ((fd = open(path, O_RDONLY)) != -1) {
@@ -209,7 +209,7 @@ test_io_read_block(struct s3backer_store *const s3b, s3b_block_t block_num, void
 
     /* Logging */
     if (config->debug) {
-        (*config->log)(LOG_DEBUG, "test_io: read %0*jx complete%s%s", S3B_BLOCK_NUM_DIGITS, (uintmax_t)block_num,
+        (*config->log)(LOG_DEBUG, "test_io: read %0*jx complete%s%s", CB_BLOCK_NUM_DIGITS, (uintmax_t)block_num,
           zero_block ? " (zero)" : "", r == EEXIST ? " (expected md5 match)" : "");
     }
 
@@ -218,10 +218,10 @@ test_io_read_block(struct s3backer_store *const s3b, s3b_block_t block_num, void
 }
 
 static int
-test_io_write_block(struct s3backer_store *const s3b, s3b_block_t block_num, const void *src, u_char *caller_md5,
+test_io_write_block(struct cloudbacker_store *const cb, cb_block_t block_num, const void *src, u_char *caller_md5,
   check_cancel_t *check_cancel, void *check_cancel_arg)
 {
-    struct test_io_private *const priv = s3b->data;
+    struct test_io_private *const priv = cb->data;
     struct http_io_conf *const config = priv->config;
     u_char md5[MD5_DIGEST_LENGTH];
     char temp[PATH_MAX];
@@ -250,7 +250,7 @@ test_io_write_block(struct s3backer_store *const s3b, s3b_block_t block_num, con
     /* Logging */
     if (config->debug) {
         (*config->log)(LOG_DEBUG, "test_io: write %0*jx started%s",
-          S3B_BLOCK_NUM_DIGITS, (uintmax_t)block_num, src == NULL ? " (zero block)" : "");
+          CB_BLOCK_NUM_DIGITS, (uintmax_t)block_num, src == NULL ? " (zero block)" : "");
     }
 
     /* Random delay */
@@ -258,12 +258,12 @@ test_io_write_block(struct s3backer_store *const s3b, s3b_block_t block_num, con
 
     /* Random error */
     if ((random() % 100) < RANDOM_ERROR_PERCENT) {
-        (*config->log)(LOG_ERR, "test_io: random failure writing %0*jx", S3B_BLOCK_NUM_DIGITS, (uintmax_t)block_num);
+        (*config->log)(LOG_ERR, "test_io: random failure writing %0*jx", CB_BLOCK_NUM_DIGITS, (uintmax_t)block_num);
         return EAGAIN;
     }
 
     /* Generate path */
-    snprintf(path, sizeof(path), "%s/%s%0*jx", config->bucket, config->prefix, S3B_BLOCK_NUM_DIGITS, (uintmax_t)block_num);
+    snprintf(path, sizeof(path), "%s/%s%0*jx", config->bucket, config->prefix, CB_BLOCK_NUM_DIGITS, (uintmax_t)block_num);
 
     /* Delete zero blocks */
     if (src == NULL) {
@@ -303,36 +303,36 @@ test_io_write_block(struct s3backer_store *const s3b, s3b_block_t block_num, con
 
     /* Logging */
     if (config->debug)
-        (*config->log)(LOG_DEBUG, "test_io: write %0*jx complete", S3B_BLOCK_NUM_DIGITS, (uintmax_t)block_num);
+        (*config->log)(LOG_DEBUG, "test_io: write %0*jx complete", CB_BLOCK_NUM_DIGITS, (uintmax_t)block_num);
 
     /* Done */
     return 0;
 }
 
 static int
-test_io_read_block_part(struct s3backer_store *s3b, s3b_block_t block_num, u_int off, u_int len, void *dest)
+test_io_read_block_part(struct cloudbacker_store *cb, cb_block_t block_num, u_int off, u_int len, void *dest)
 {
-    struct test_io_private *const priv = s3b->data;
+    struct test_io_private *const priv = cb->data;
     struct http_io_conf *const config = priv->config;
 
-    return block_part_read_block_part(s3b, block_num, config->block_size, off, len, dest);
+    return block_part_read_block_part(cb, block_num, config->block_size, off, len, dest);
 }
 
 static int
-test_io_write_block_part(struct s3backer_store *s3b, s3b_block_t block_num, u_int off, u_int len, const void *src)
+test_io_write_block_part(struct cloudbacker_store *cb, cb_block_t block_num, u_int off, u_int len, const void *src)
 {
-    struct test_io_private *const priv = s3b->data;
+    struct test_io_private *const priv = cb->data;
     struct http_io_conf *const config = priv->config;
 
-    return block_part_write_block_part(s3b, block_num, config->block_size, off, len, src);
+    return block_part_write_block_part(cb, block_num, config->block_size, off, len, src);
 }
 
 static int
-test_io_list_blocks(struct s3backer_store *s3b, block_list_func_t *callback, void *arg)
+test_io_list_blocks(struct cloudbacker_store *cb, block_list_func_t *callback, void *arg)
 {
-    struct test_io_private *const priv = s3b->data;
+    struct test_io_private *const priv = cb->data;
     struct http_io_conf *const config = priv->config;
-    s3b_block_t block_num;
+    cb_block_t block_num;
     struct dirent *dent;
     DIR *dir;
     int i;
