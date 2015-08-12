@@ -1023,10 +1023,16 @@ validate_config(void)
 
     /* Set default base URL */
     if (config.http_io.baseURL == NULL) {
-        if (customRegion && strcmp(config.http_io.region, S3BACKER_DEFAULT_REGION) != 0)
-            snprintf(urlbuf, sizeof(urlbuf), "http%s://s3-%s.%s/", config.ssl ? "s" : "", config.http_io.region, S3_DOMAIN);
-        else
-            snprintf(urlbuf, sizeof(urlbuf), "http%s://s3.%s/", config.ssl ? "s" : "", S3_DOMAIN);
+        if(config.http_io.storage_prefix == S3_STORAGE){
+            if (customRegion && strcmp(config.http_io.region, S3BACKER_DEFAULT_REGION) != 0)
+                snprintf(urlbuf, sizeof(urlbuf), "http%s://s3-%s.%s/", config.ssl ? "s" : "", config.http_io.region, S3_DOMAIN);
+            else
+                snprintf(urlbuf, sizeof(urlbuf), "http%s://s3.%s/", config.ssl ? "s" : "", S3_DOMAIN);
+        }
+        else if(config.http_io.storage_prefix == GS_STORAGE){
+	     snprintf(urlbuf, sizeof(urlbuf), "http%s://%s/", config.ssl ? "s" : "", GS_DOMAIN);
+        }
+
         if ((config.http_io.baseURL = strdup(urlbuf)) == NULL) {
             warn("malloc");
             return -1;

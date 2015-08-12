@@ -195,6 +195,9 @@ typedef void (*header_parser_t)(char *buf, struct http_io *io);
 /* I/O state when reading/writing a block */
 struct http_io {
 
+    // post data for post request
+    char *post_data;
+
     // I/O buffers
     struct http_io_bufs bufs;
 
