@@ -1,6 +1,6 @@
 
 /*
- * cbacker - FUSE-based single file backing store via Amazon S3
+ * cloudbacker - FUSE-based single file backing store
  * 
  * Copyright 2008-2011 Archie L. Cobbs <archie@dellroad.org>
  * 
@@ -389,7 +389,7 @@ http_io_add_date(struct http_io_private *const priv, struct http_io *const io, t
 }    
 
 /*
- * Improve S3 name hashing by reversing the bit sequence of the block number.
+ * Improve name hashing by reversing the bit sequence of the block number.
  *
  * Using this approach results in creating two different name spaces for the
  * object names - one 'logical', where object name is a string representation

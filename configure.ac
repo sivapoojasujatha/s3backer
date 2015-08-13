@@ -1,5 +1,5 @@
 #
-# s3backer - FUSE-based single file backing store via Amazon S3
+# cloudbacker - FUSE-based single file backing store via Amazon S3
 # 
 # Copyright 2008-2011 Archie L. Cobbs <archie@dellroad.org>
 # 
@@ -19,7 +19,7 @@
 # 02110-1301, USA.
 #
 
-AC_INIT([s3backer FUSE filesystem backed by Amazon S3], [1.4.1], [https://github.com/archiecobbs/s3backer], [s3backer])
+AC_INIT([cloudbacker FUSE filesystem backed by Amazon S3], [1.0.0], [https://github.com/archiecobbs/cloudbacker], [cloudbacker])
 AC_CONFIG_AUX_DIR(scripts)
 AM_INIT_AUTOMAKE
 dnl AM_MAINTAINER_MODE

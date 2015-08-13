@@ -1,6 +1,6 @@
 
 /*
- * s3backer - FUSE-based single file backing store via Amazon S3
+ * cloudbacker - FUSE-based single file backing store
  * 
  * Copyright 2008-2011 Archie L. Cobbs <archie@dellroad.org>
  * 
@@ -255,9 +255,9 @@ struct http_io {
     cb_block_t          block_num;              // The block we're reading/writing
     u_int               buf_size;               // Size of data buffer
     u_int               *content_lengthp;       // Returned Content-Length
-    uintmax_t           file_size;              // file size from "x-[amz]/[goog]-meta-s3backer-filesize"
-    u_int               block_size;             // block size from "x-[amz]/[goog]-meta-s3backer-blocksize"
-    u_int		name_hash;		// object name hashing from "x-[amz]/[goog]-meta-s3backer-namehash"
+    uintmax_t           file_size;              // file size from "x-[amz]/[goog]-meta-*backer-filesize"
+    u_int               block_size;             // block size from "x-[amz]/[goog]-meta-*backer-blocksize"
+    u_int		name_hash;		// object name hashing from "x-[amz]/[goog]-meta-*backer-namehash"
     u_int               expect_304;             // a verify request; expect a 304 response
     u_char              md5[MD5_DIGEST_LENGTH]; // parsed ETag header
     u_char              hmac[SHA_DIGEST_LENGTH];// parsed "x-[amz]/[goog]-meta-cloudbacker.hmac" header

@@ -1,6 +1,6 @@
 
 /*
- * s3backer - FUSE-based single file backing store via Amazon S3
+ * cloudbacker - FUSE-based single file backing store
  * 
  * Copyright 2008-2011 Archie L. Cobbs <archie@dellroad.org>
  * 
@@ -97,9 +97,9 @@
 #ifndef FUSE_MAX_DAEMON_TIMEOUT
 #define FUSE_MAX_DAEMON_TIMEOUT         600
 #endif
-#define s3bquote0(x)                    #x
-#define s3bquote(x)                     s3bquote0(x)
-#define FUSE_MAX_DAEMON_TIMEOUT_STRING  s3bquote(FUSE_MAX_DAEMON_TIMEOUT)
+#define cbquote0(x)                    #x
+#define cbquote(x)                     cbquote0(x)
+#define FUSE_MAX_DAEMON_TIMEOUT_STRING  cbquote(FUSE_MAX_DAEMON_TIMEOUT)
 #endif  /* __APPLE__ */
 
 /* Block counting info */
@@ -252,7 +252,6 @@ static struct cb_config config = {
  * Command line flags
  *
  * Note: each entry here is listed twice, so both version "--foo=X" and "-o foo=X" work.
- * See http://code.google.com/p/s3backer/issues/detail?id=7
  */
 static const struct fuse_opt option_list[] = {
     {
@@ -1959,15 +1958,26 @@ usage(void)
     fprintf(stderr, "\tcloudbacker --reset-mounted-flag [options] bucket\n");
     fprintf(stderr, "Options:\n");
     fprintf(stderr, "\t--%-27s %s\n", "accessFile=FILE", "File containing `accessID:accessKey' pairs");
-    fprintf(stderr, "\t--%-27s %s\n", "accessId=ID", "S3 access key ID");
-    fprintf(stderr, "\t--%-27s %s\n", "accessKey=KEY", "S3 secret access key");
-    fprintf(stderr, "\t--%-27s %s\n", "accessType=TYPE", "S3 ACL used when creating new items; one of:");
-    fprintf(stderr, "\t  %-27s ", "");
+    fprintf(stderr, "\t--%-27s %s\n", "accessId=ID", "GS or S3 access key ID");
+    fprintf(stderr, "\t--%-27s %s\n", "accessKey=KEY", "GS secret key file path or S3 secret access key");
+    fprintf(stderr, "\t--%-27s %s\n", "accessType=TYPE", "GS or S3 ACL used when creating new items; one of:");
+    fprintf(stderr, "\t  %-27s ", "For GS ");
+    for (i = 0; i < sizeof(gs_acls) / sizeof(*gs_acls); i++){
+        if(i == 4)
+           fprintf(stderr, "\n\t  %-27s "," ");
+        fprintf(stderr, "%s%s", ((i > 0) && (i != 4)) ? ", " : "  ", gs_acls[i]);  
+    }
+    fprintf(stderr, "\n");
+    fprintf(stderr, "\t  %-27s ", "For S3 ");
     for (i = 0; i < sizeof(s3_acls) / sizeof(*s3_acls); i++)
         fprintf(stderr, "%s%s", i > 0 ? ", " : "  ", s3_acls[i]);
     fprintf(stderr, "\n");
-    fprintf(stderr, "\t--%-27s %s\n", "authVersion=TYPE", "Specify S3 authentication style; one of:");
-    fprintf(stderr, "\t  %-27s ", "");
+    fprintf(stderr, "\t--%-27s %s\n", "authVersion=TYPE", "Specify GS or S3 authentication style; one of:");
+    fprintf(stderr, "\t  %-27s ", "For GS ");
+    for (i = 0; i < sizeof(gs_auth_types) / sizeof(*gs_auth_types); i++)
+        fprintf(stderr, "%s%s", i > 0 ? ", " : "  ", gs_auth_types[i]);
+    fprintf(stderr, "\n");
+    fprintf(stderr, "\t  %-27s ", "For S3 ");
     for (i = 0; i < sizeof(s3_auth_types) / sizeof(*s3_auth_types); i++)
         fprintf(stderr, "%s%s", i > 0 ? ", " : "  ", s3_auth_types[i]);
     fprintf(stderr, "\n");
@@ -2013,7 +2023,11 @@ usage(void)
     fprintf(stderr, "\t--%-27s %s\n", "readOnly", "Return `Read-only file system' error for write attempts");
     fprintf(stderr, "\t--%-27s %s\n", "region=region", "Specify AWS region");
     fprintf(stderr, "\t--%-27s %s\n", "reset-mounted-flag", "Reset `already mounted' flag in the filesystem");
-    fprintf(stderr, "\t--%-27s %s\n", "rrs", "Target written blocks for Reduced Redundancy Storage");
+    fprintf(stderr, "\t--%-27s %s\n", "storageClass=iclass", "GS or S3 storage class used when mounting file system; one of:");
+    fprintf(stderr, "\t  %-27s ", "");
+    for (i = 0; i < sizeof(cb_storageClasses) / sizeof(*cb_storageClasses); i++)
+        fprintf(stderr, "%s%s", i > 0 ? ", " : "  ", cb_storageClasses[i]);
+    fprintf(stderr, "\n");
     fprintf(stderr, "\t--%-27s %s\n", "size=SIZE", "File size (with optional suffix 'K', 'M', 'G', etc.)");
     fprintf(stderr, "\t--%-27s %s\n", "ssl", "Enable SSL");
     fprintf(stderr, "\t--%-27s %s\n", "statsFilename=NAME", "Name of statistics file in filesystem");
@@ -2025,9 +2039,9 @@ usage(void)
     fprintf(stderr, "Default values:\n");
     fprintf(stderr, "\t--%-27s \"%s\"\n", "accessFile", "$HOME/" CLOUDBACKER_DEFAULT_PWD_FILE);
     fprintf(stderr, "\t--%-27s %s\n", "accessId", "The first one listed in `accessFile'");
-    fprintf(stderr, "\t--%-27s \"%s\"\n", "accessType", S3BACKER_DEFAULT_ACCESS_TYPE);
-    fprintf(stderr, "\t--%-27s \"%s\"\n", "authVersion", S3BACKER_DEFAULT_AUTH_VERSION);
-    fprintf(stderr, "\t--%-27s \"%s\"\n", "baseURL", "http://s3." S3_DOMAIN "/");
+    fprintf(stderr, "\t--%-27s %s\"%s\"%s\"%s\"\n", "accessType","For GS ", GSBACKER_DEFAULT_ACCESS_TYPE, ", For S3 ",S3BACKER_DEFAULT_ACCESS_TYPE );
+    fprintf(stderr, "\t--%-27s %s\"%s\"%s\"%s\"\n", "authVersion (For GS)","For GS ", GSBACKER_DEFAULT_AUTH_VERSION, ", For S3 ",S3BACKER_DEFAULT_AUTH_VERSION);
+    fprintf(stderr, "\t--%-27s %s\"%s\"%s\"%s\"\n", "baseURL","For GS ", "http://s3." S3_DOMAIN "/", ", For S3 ","http://" GS_DOMAIN "/");
     fprintf(stderr, "\t--%-27s %u\n", "blockCacheSize", CLOUDBACKER_DEFAULT_BLOCK_CACHE_SIZE);
     fprintf(stderr, "\t--%-27s %u\n", "blockCacheThreads", CLOUDBACKER_DEFAULT_BLOCK_CACHE_NUM_THREADS);
     fprintf(stderr, "\t--%-27s %u\n", "blockCacheTimeout", CLOUDBACKER_DEFAULT_BLOCK_CACHE_TIMEOUT);

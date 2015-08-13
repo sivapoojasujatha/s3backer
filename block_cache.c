@@ -1,6 +1,6 @@
 
 /*
- * s3backer - FUSE-based single file backing store via Amazon S3
+ * cloudbacker - FUSE-based single file backing store
  * 
  * Copyright 2008-2011 Archie L. Cobbs <archie@dellroad.org>
  * 
@@ -134,7 +134,7 @@ struct cache_entry {
 /* Private data */
 struct block_cache_private {
     struct block_cache_conf         *config;        // configuration
-    struct cloudbacker_store        *inner;         // underlying s3backer store
+    struct cloudbacker_store        *inner;         // underlying cloudbacker store
     struct block_cache_stats        stats;          // statistics
     TAILQ_HEAD(, cache_entry)       cleans;         // list of clean blocks (LRU order)
     TAILQ_HEAD(, cache_entry)       dirties;        // list of dirty blocks (write order)
@@ -203,14 +203,14 @@ static int block_cache_write_data(struct block_cache_private *priv, struct cache
 #ifndef NDEBUG
 static void block_cache_check_invariants(struct block_cache_private *priv);
 static void block_cache_check_one(void *arg, void *value);
-#define S3BCACHE_CHECK_INVARIANTS(priv)     block_cache_check_invariants(priv)
+#define CBCACHE_CHECK_INVARIANTS(priv)     block_cache_check_invariants(priv)
 #else
-#define S3BCACHE_CHECK_INVARIANTS(priv)     do { } while (0)
+#define CBCACHE_CHECK_INVARIANTS(priv)     do { } while (0)
 #endif
 
 /*
- * Wrap an underlying s3backer store with a block cache. Invoking the
- * destroy method will destroy both this and the inner s3backer store.
+ * Wrap an underlying cloudbacker store with a block cache. Invoking the
+ * destroy method will destroy both this and the inner cloudbacker store.
  *
  * Returns NULL and sets errno on failure.
  */
@@ -283,7 +283,7 @@ block_cache_create(struct block_cache_conf *config, struct cloudbacker_store *in
 
     /* Grab lock */
     pthread_mutex_lock(&priv->mutex);
-    S3BCACHE_CHECK_INVARIANTS(priv);
+    CBCACHE_CHECK_INVARIANTS(priv);
 
     /* Create threads */
     for (priv->num_threads = 0; priv->num_threads < config->num_threads; priv->num_threads++) {
@@ -397,7 +397,7 @@ block_cache_flush(struct cloudbacker_store *const cb)
 
     /* Grab lock and sanity check */
     pthread_mutex_lock(&priv->mutex);
-    S3BCACHE_CHECK_INVARIANTS(priv);
+    CBCACHE_CHECK_INVARIANTS(priv);
 
     /* Wait for all dirty blocks to be written and all worker threads to exit */
     priv->stopping = 1;
@@ -419,7 +419,7 @@ block_cache_destroy(struct cloudbacker_store *const cb)
 
     /* Grab lock and sanity check */
     pthread_mutex_lock(&priv->mutex);
-    S3BCACHE_CHECK_INVARIANTS(priv);
+    CBCACHE_CHECK_INVARIANTS(priv);
 
     /* Wait for all dirty blocks to be written and all worker threads to exit */
     priv->stopping = 1;
@@ -506,7 +506,7 @@ block_cache_read(struct block_cache_private *const priv, cb_block_t block_num, u
 
     /* Grab lock */
     pthread_mutex_lock(&priv->mutex);
-    S3BCACHE_CHECK_INVARIANTS(priv);
+    CBCACHE_CHECK_INVARIANTS(priv);
 
     /* Update count of block(s) read sequentially by the upper layer */
     if (block_num == priv->seq_last + 1) {
@@ -631,7 +631,7 @@ read:
     pthread_mutex_unlock(&priv->mutex);
     r = (*priv->inner->read_block)(priv->inner, block_num, data, md5, entry->verify ? entry->md5 : NULL, 0);
     pthread_mutex_lock(&priv->mutex);
-    S3BCACHE_CHECK_INVARIANTS(priv);
+    CBCACHE_CHECK_INVARIANTS(priv);
 
     /* The entry should still exist and be in state READING[2] */
     assert(cb_hash_get(priv->hashtable, block_num) == entry);
@@ -748,7 +748,7 @@ block_cache_write(struct block_cache_private *const priv, cb_block_t block_num, 
 
 again:
     /* Sanity check */
-    S3BCACHE_CHECK_INVARIANTS(priv);
+    CBCACHE_CHECK_INVARIANTS(priv);
 
     /* Find cache entry */
     if ((entry = cb_hash_get(priv->hashtable, block_num)) != NULL) {
@@ -854,7 +854,7 @@ success:
             pthread_cond_wait(&priv->write_complete, &priv->mutex);
 
             /* Sanity check */
-            S3BCACHE_CHECK_INVARIANTS(priv);
+            CBCACHE_CHECK_INVARIANTS(priv);
 
             /* Find cache entry */
             if ((entry = cb_hash_get(priv->hashtable, block_num)) == NULL)
@@ -1019,7 +1019,7 @@ block_cache_worker_main(void *arg)
     while (1) {
 
         /* Sanity check */
-        S3BCACHE_CHECK_INVARIANTS(priv);
+        CBCACHE_CHECK_INVARIANTS(priv);
 
         /* Get current time */
         now = block_cache_get_time(priv);
@@ -1061,7 +1061,7 @@ block_cache_worker_main(void *arg)
             pthread_mutex_unlock(&priv->mutex);
             r = (*priv->inner->write_block)(priv->inner, entry->block_num, buf, md5, block_cache_check_cancel, priv);
             pthread_mutex_lock(&priv->mutex);
-            S3BCACHE_CHECK_INVARIANTS(priv);
+            CBCACHE_CHECK_INVARIANTS(priv);
 
             /* Sanity checks */
             assert(ENTRY_GET_STATE(entry) == WRITING || ENTRY_GET_STATE(entry) == WRITING2);
@@ -1148,7 +1148,7 @@ block_cache_check_cancel(void *arg, cb_block_t block_num)
 
     /* Lock mutex */
     pthread_mutex_lock(&priv->mutex);
-    S3BCACHE_CHECK_INVARIANTS(priv);
+    CBCACHE_CHECK_INVARIANTS(priv);
 
     /* Find cache entry */
     entry = cb_hash_get(priv->hashtable, block_num);

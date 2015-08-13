@@ -1,6 +1,6 @@
 
 #
-# s3backer - FUSE-based single file backing store via Amazon S3
+# cloudbacker - FUSE-based single file backing store
 # 
 # Copyright 2008-2011 Archie L. Cobbs <archie@dellroad.org>
 # 
@@ -46,7 +46,7 @@ docdir=             $(datadir)/doc/packages/$(PACKAGE)
 
 doc_DATA=           CHANGES COPYING README INSTALL TODO
 
-EXTRA_DIST=         CHANGES s3backer.1 s3backer.spec
+EXTRA_DIST=         CHANGES cloudbacker.1 cloudbacker.spec
 
 cloudbacker_SOURCES=   main.c \
 		    block_cache.c \

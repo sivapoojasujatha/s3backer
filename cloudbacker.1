@@ -1,6 +1,6 @@
 .\"  -*- nroff -*-
 .\"
-.\" s3backer - FUSE-based single file backing store via Amazon S3
+.\" cloudbacker - FUSE-based single file backing store
 .\" 
 .\" Copyright 2008-2011 Archie L. Cobbs <archie@dellroad.org>
 .\" 
@@ -20,20 +20,20 @@
 .\" 02110-1301, USA.
 .\"
 .Dd September 7, 2009
-.Dt S3BACKER 1
+.Dt CLOUDBACKER 1
 .Os
 .Sh NAME
-.Nm s3backer
-.Nd FUSE-based single file backing store via Amazon S3
+.Nm cloudbacker
+.Nd FUSE-based single file backing store
 .Sh SYNOPSIS
-.Nm s3backer
+.Nm cloudbacker
 .Bk -words
 .Op options
 .Ar bucket
 .Ar /mount/point
 .Ek
 .Pp
-.Nm s3backer
+.Nm cloudbacker
 .Bk -words
 .Fl \-test
 .Op options
@@ -41,14 +41,14 @@
 .Ar /mount/point
 .Ek
 .Pp
-.Nm s3backer
+.Nm cloudbacker
 .Bk -words
 .Fl \-erase
 .Op options
 .Ar bucket
 .Ek
 .Pp
-.Nm s3backer
+.Nm cloudbacker
 .Bk -words
 .Fl \-reset-mounted-flag
 .Op options
@@ -56,9 +56,9 @@
 .Ek
 .Sh DESCRIPTION
 .Nm
-is a filesystem that contains a single file backed by the Amazon Simple Storage Service (Amazon S3).
+is a filesystem that contains a single file backed by Amazon S3 or Google cloud storage.
 As a filesystem, it is very simple: it provides a single normal file having a fixed size.
-Underneath, the file is divided up into blocks, and the content of each block is stored in a unique Amazon S3 object.
+Underneath, the file is divided up into blocks, and the content of each block is stored in a unique object.
 In other words, what
 .Nm
 provides is really more like an S3-backed virtual hard disk device, rather than a filesystem.
@@ -99,7 +99,7 @@ also includes its own internal block cache for increased performance, using asyn
 to take advantage of the parallelism inherent in the network.
 .El
 .Ss Consistency Guarantees
-Amazon S3 makes relatively weak guarantees relating to the timing and consistency of reads vs. writes
+cloudbacker makes relatively weak guarantees relating to the timing and consistency of reads vs. writes
 (collectively known as ``eventual consistency'').
 .Nm
 includes logic and configuration parameters to work around these limitations, allowing the user to
@@ -138,7 +138,7 @@ will list all existing blocks at startup so it knows ahead of time exactly which
 .Ss File and Block Size Auto-Detection
 As a convenience, whenever the first block of the backed file is written,
 .Nm
-includes as meta-data (in the ``x-amz-meta-s3backer-filesize'' header) the total size of the file.
+includes as meta-data (in the ``x-amz-meta-s3backer-filesize' or `x-goog-meta-gsbacker-filesize'' header) the total size of the file.
 Along with the size of the block itself, this value can be checked and/or auto-detected later when
 the filesystem is remounted, eliminating the need for the
 .Fl \-blockSize
@@ -284,6 +284,7 @@ by FUSE.
 .Bl -tag -width Ds
 .It Fl \-accessFile=FILE
 Specify a file containing `accessID:accessKey' pairs, one per-line.
+Specify a file containing `accessID:path to secret key file with file name' pairs, one per-line.
 Blank lines and lines beginning with a `#' are ignored.
 If no
 .Fl \-accessKey
@@ -295,20 +296,24 @@ nor
 .Fl \-accessId
 is specified, the first entry in this file will be used.
 Default value is
-.Pa $HOME/.s3backer_passwd .
+.Pa $HOME/.cloudbacker_passwd .
 .It Fl \-accessId=ID
-Specify Amazon S3 access ID.
+Specify Amazon S3 or GS access ID.
 Specify an empty string to force no access ID.
 If no access ID is specified (and none is found in the access file) then
 .Nm
 will still function, but only reads of publicly available filesystems will work.
 .It Fl \-accessKey=KEY
-Specify Amazon S3 access key. To avoid publicizing this secret via the command line, use
+Specify GS or S3 access key. To avoid publicizing this secret via the command line, use
 .Fl \-accessFile
 instead of this flag.
 .It Fl \-accessType=TYPE
-Specify the Amazon S3 access privilege ACL type for newly written blocks.
+Specify the GS or S3 access privilege ACL type for newly written blocks.
 The value must be one of `private', `public-read', `public-read-write', or `authenticated-read'.
+For GS:   private, project-private, public-read, public-read-write,
+          authenticated-read, bucket-owner-read, bucket-owner-full-control.
+Default is `project-private'.
+For S3:   private, public-read, public-read-write, authenticated-read
 Default is `private'.
 .It Fl \-accessEC2IAM=ROLE
 Download access credentials and security token in JSON document form from
@@ -322,6 +327,8 @@ This option allows S3 credentials to be provided automatically via the specified
 when running on an Amazon EC2 instance.
 .It Fl \-authVersion=TYPE
 Specify how to authenticate requests. There are two supported authentication methods:
+.Pp
+For S3
 .Ar aws2
 is the original AWS authentication scheme.
 .Ar aws4
@@ -331,8 +338,14 @@ is the newer, recommended authentication scheme.
 is the default setting starting in version 1.4, and is required for certain non-US regions, while
 .Ar aws2
 may still be required by some non-Amazon S3 providers.
+.Pp
+For GS
+.Ar oauth2
+is the oAuth 2.0 authentication scheme.
+.Ar aws2
+can be used in backward compatibility mode
 .It Fl \-baseURL=URL
-Specify the base URL, which must end in a forward slash. Default is `http://s3.amazonaws.com/'.
+Specify the base URL, which must end in a forward slash. Default is `http://s3.amazonaws.com/' for S3 and `http://storage.googleapis.com/' for GS.
 .It Fl \-blockCacheFile=FILE
 Specify a file in which to store cached data blocks.
 Without this flag, the block cache lives entirely in process memory and the cached data disappears when
@@ -668,6 +681,9 @@ flag is required.
 Supply the password for encryption and authentication as a command-line parameter.
 .It Fl \-passwordFile=FILE
 Read the password for encryption and authentication from (the first line of) the specified file.
+.It Fl \-maxKeys=NUM
+Specify a value to limit number of blocks to be listed at time.
+By using different prefixes, multiple independent
 .It Fl \-prefix=STRING
 Specify a prefix to prepend to the resource names within bucket that identify each block.
 By using different prefixes, multiple independent
@@ -712,8 +728,10 @@ Running
 will clear it manually.
 But see also BUGS below.
 .Pp
-.It Fl \-rrs
-When writing blocks, specify Reduced Redundancy Storage.
+.It Fl \-storageClass
+For S3, when writing blocks, specify Reduced Redundancy Storage.
+For GS, storageClass is bucket specific, not yet implemented.
+Acceptable values: STANDARD, NEARLINE, DURABLE_REDUCED_AVAILABILITY, REDUCED_REDUNDANCY
 .It Fl \-size=SIZE
 Specify the size (in bytes) of the backed file to be exported by the filesystem.
 The size may have an optional suffix 'K' for kilobytes, 'M' for megabytes, 'G' for gigabytes, 'T' for terabytes, 'E' for exabytes, 'Z' for zettabytes, or 'Y' for yottabytes.
@@ -821,7 +839,7 @@ to FUSE (unless overridden by the user on the command line):
 .Sh FILES
 .Bl -tag -compact -width Ds
 .It Pa $HOME/.s3backer_passwd
-Contains Amazon S3 `accessID:accessKey' pairs.
+Contains GS or S3 `accessID:accessKey' pairs.
 .El
 .Sh SEE ALSO
 .Xr curl 1 ,
@@ -830,12 +848,14 @@ Contains Amazon S3 `accessID:accessKey' pairs.
 .Xr umount 8 ,
 .Xr fusermount 8 .
 .Rs
-.%T "s3backer: FUSE-based single file backing store via Amazon S3"
-.%O https://github.com/archiecobbs/s3backer
+.%T "cloudbacker: FUSE-based single file backing store"
 .Re
 .Rs
 .%T "Amazon Simple Storage Service (Amazon S3)"
 .%O http://aws.amazon.com/s3
+.Re
+.%T "Google Cloud Storage"
+.%O https://cloud.google.com/storage/
 .Re
 .Rs
 .%T "FUSE: Filesystem in Userspace"

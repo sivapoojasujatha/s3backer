@@ -1,6 +1,6 @@
 
 /*
- * s3backer - FUSE-based single file backing store via Amazon S3
+ * cloudbacker - FUSE-based single file backing store
  * 
  * Copyright 2008-2011 Archie L. Cobbs <archie@dellroad.org>
  * 
@@ -29,7 +29,7 @@
  * Written block information caching.
  *
  * The purpose of this is to minimize problems from the weak guarantees provided
- * by S3's "eventual consistency". We do this by:
+ * by "eventual consistency". We do this by:
  *
  *  (a) Enforcing a minimum delay between the completion of one PUT/DELETE
  *      of a block and the initiation of the next PUT/DELETE of the same block

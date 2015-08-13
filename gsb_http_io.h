@@ -1,5 +1,5 @@
 /*
- * s3backer - FUSE-based single file backing store via Amazon S3
+ * cloudbacker - FUSE-based single file backing store
  *
  * Copyright 2008-2011 Archie L. Cobbs <archie@dellroad.org>
  * 
