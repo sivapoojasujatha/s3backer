@@ -75,9 +75,4 @@
 #define JWT_AUTH_DEFAULT_PASSWORD       "notasecret"
 #define GCS_OAUTH2_ACCESS_TOKEN         "access_token"
 
-/*
- * Function Prototypes
- */
-
-
 #endif

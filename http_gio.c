@@ -107,6 +107,7 @@ static int http_io_is_zero_block(const void *data, u_int block_size);
 static int http_io_parse_hex(const char *str, u_char *buf, u_int nbytes);
 static void http_io_prhex(char *buf, const u_char *data, size_t len);
 static int http_io_strcasecmp_ptr(const void *ptr1, const void *ptr2);
+static void set_http_io_params(struct http_io_private *priv);
 
 /* Parser functions */
 static void file_size_parser(char *buf, struct http_io *io);
@@ -154,6 +155,7 @@ http_io_create(struct http_io_conf *config)
         r = errno;
         goto fail0;
     }
+
     cb->meta_data = http_io_meta_data;
     cb->set_mounted = http_io_set_mounted;
     cb->read_block = http_io_read_block;
@@ -163,11 +165,21 @@ http_io_create(struct http_io_conf *config)
     cb->list_blocks = http_io_list_blocks;
     cb->flush = http_io_flush;
     cb->destroy = http_io_destroy;
+
     if ((priv = calloc(1, sizeof(*priv))) == NULL) {
         r = errno;
         goto fail1;
     }
     priv->config = config;
+
+    /* Allocate memory for http IO parameters structure*/
+    if ((priv->config->http_io_params = calloc(1, sizeof(*(priv->config->http_io_params)))) == NULL) {
+        r = errno;
+        goto fail2;
+    }
+    /* set http io params */
+    set_http_io_params(priv);
+
     if ((r = pthread_mutex_init(&priv->mutex, NULL)) != 0)
         goto fail2;
     LIST_INIT(&priv->curls);
@@ -179,7 +191,7 @@ http_io_create(struct http_io_conf *config)
         r = errno;
         goto fail3;
     }
- for (nlocks = 0; nlocks < num_openssl_locks; nlocks++) {
+    for (nlocks = 0; nlocks < num_openssl_locks; nlocks++) {
         if ((r = pthread_mutex_init(&openssl_locks[nlocks], NULL)) != 0)
             goto fail4;
     }
@@ -224,7 +236,7 @@ http_io_create(struct http_io_conf *config)
             r = EINVAL;
             goto fail4;
         }
- /* Hash the bulk encryption key to get the IV encryption key */
+        /* Hash the bulk encryption key to get the IV encryption key */
         if ((r = PKCS5_PBKDF2_HMAC_SHA1((char *)priv->key, priv->keylen,
           priv->key, priv->keylen, PBKDF2_ITERATIONS, priv->keylen, priv->ivkey)) != 1) {
             (*config->log)(LOG_ERR, "failed to create encryption key");
@@ -369,27 +381,13 @@ http_io_get_stats(struct cloudbacker_store *cb, struct http_io_stats *stats)
 static void
 http_io_add_date(struct http_io_private *const priv, struct http_io *const io, time_t now)
 {
-    struct http_io_conf *const config = priv->config;
     char buf[DATE_BUF_SIZE];
     struct tm tm;
 
-    if(config->storage_prefix == S3_STORAGE){
-        if (strcmp(config->auth.u.s3.authVersion, AUTH_VERSION_AWS2) == 0) {
-            strftime(buf, sizeof(buf), HTTP_DATE_BUF_FMT, gmtime_r(&now, &tm));
-            io->headers = http_io_add_header(io->headers, "%s: %s", HTTP_DATE_HEADER, buf);
-        } 
-        else {
-            strftime(buf, sizeof(buf), AWS_DATE_BUF_FMT, gmtime_r(&now, &tm));
-            io->headers = http_io_add_header(io->headers, "%s: %s", AWS_DATE_HEADER, buf);
-        }
-    }
-    else if(config->storage_prefix == GS_STORAGE){
-        if (strcmp(config->auth.u.gs.authVersion, AUTH_VERSION_OAUTH2) == 0) {
-            strftime(buf, sizeof(buf), HTTP_DATE_BUF_FMT, gmtime_r(&now, &tm));
-            io->headers = http_io_add_header(io->headers, "%s: %s", HTTP_DATE_HEADER, buf);
-        }
-    }
-}
+    strftime(buf, sizeof(buf), priv->config->http_io_params->date_buf_fmt, gmtime_r(&now, &tm));
+    io->headers = http_io_add_header(io->headers, "%s: %s", priv->config->http_io_params->date_header, buf);
+}    
+
 /*
  * Improve S3 name hashing by reversing the bit sequence of the block number.
  *
@@ -542,22 +540,44 @@ fail:
 /* Parsers defined */
 static void file_size_parser(char *buf, struct http_io *io)
 {
-    (void)sscanf(buf, S3B_FILE_SIZE_HEADER ": %ju", &io->file_size);
+     char delim[] = ": ";
+     char* token;
+     if (strstr(buf, io->config->http_io_params->file_size_header)){
+        for (token = strtok(buf, delim); token; token = strtok(NULL, delim)){
+           if (!strstr(token, io->config->http_io_params->file_size_header))
+               (void)sscanf(token, "%ju", &io->file_size);
+        }  
+    }
 }
 
 static void block_size_parser(char *buf, struct http_io *io)
 {
-    (void)sscanf(buf, S3B_BLOCK_SIZE_HEADER ": %u", &io->block_size);
+    char delim[] = ": ";
+    char* token;
+    if (strstr(buf, io->config->http_io_params->block_size_header)){
+        for (token = strtok(buf, delim); token; token = strtok(NULL, delim)){
+           if (!strstr(token, io->config->http_io_params->block_size_header))
+               (void) sscanf(token, "%u", &io->block_size);
+        }
+    }
 }
 
 static void name_hash_parser(char *buf, struct http_io *io)
 {
-    char pbuf[8];
-    if (sscanf(buf, S3B_NAME_HASH_HEADER ": %s", pbuf)) {
-        if (strncmp(pbuf, "yes", sizeof("yes")) == 0)
-            io->name_hash = 1;
-        else
-            io->name_hash = 0;
+    char delim[] = ": ";
+    char* token;
+    if (strstr(buf, io->config->http_io_params->name_hash_header)){
+        for (token = strtok(buf, delim); token; token = strtok(NULL, delim)){
+            if (!strstr(token, io->config->http_io_params->name_hash_header)){
+                char pbuf[8];
+		if (sscanf(token,  "%s", pbuf)) {
+		    if (strncmp(pbuf, "yes", sizeof("yes")) == 0)
+		        io->name_hash = 1;
+	             else
+			io->name_hash = 0;
+		}  
+            }
+        }
     }
 }
 
@@ -584,6 +604,7 @@ static void hmac_parser(char *buf, struct http_io *io)
             http_io_parse_hex(hmacbuf, io->hmac, SHA_DIGEST_LENGTH);
     }
 }
+
 static void encoding_parser(char *buf, struct http_io *io)
 {
     if (strncasecmp(buf, CONTENT_ENCODING_HEADER ":", sizeof(CONTENT_ENCODING_HEADER)) == 0) {
@@ -592,13 +613,13 @@ static void encoding_parser(char *buf, struct http_io *io)
         char *s;
 
         *io->content_encoding = '\0';
-        for (s = strtok_r(buf + sizeof(CONTENT_ENCODING_HEADER), WHITESPACE ",", &state);
-          s != NULL; s = strtok_r(NULL, WHITESPACE ",", &state)) {
+        for (s = strtok_r(buf + sizeof(CONTENT_ENCODING_HEADER), WHITESPACE ",", &state); s != NULL; s = strtok_r(NULL, WHITESPACE ",", &state)) {
             celen = strlen(io->content_encoding);
             snprintf(io->content_encoding + celen, sizeof(io->content_encoding) - celen, "%s%s", celen > 0 ? "," : "", s);
         }
     }
 }
+
 static void
 http_io_list_elem_start(void *arg, const XML_Char *name, const XML_Char **atts)
 {
@@ -828,13 +849,14 @@ http_io_set_mounted(struct cloudbacker_store *cb, int *old_valuep, int new_value
             http_io_base64_encode(md5buf, sizeof(md5buf), md5, MD5_DIGEST_LENGTH);
             io.headers = http_io_add_header(io.headers, "%s: %s", MD5_HEADER, md5buf);
         }
- /* Add ACL header (PUT only) */
+        /* Add ACL header (PUT only) */
         if (new_value)
-            io.headers = http_io_add_header(io.headers, "%s: %s", S3B_ACL_HEADER, config->auth.u.s3.accessType);
+            io.headers = http_io_add_header(io.headers, "%s: %s", priv->config->http_io_params->acl_header,  priv->config->http_io_params->acl_headerval);
 
         /* Add storage class header (if needed) */
-        if ((strcasecmp(config->storageClass, SCLASS_S3_REDUCED_REDUNDANCY)==0))
-            io.headers = http_io_add_header(io.headers, "%s: %s", S3B_STORAGE_CLASS_HEADER, SCLASS_S3_REDUCED_REDUNDANCY);
+        if (strcasecmp(config->storageClass, SCLASS_S3_REDUCED_REDUNDANCY)==0){
+            io.headers = http_io_add_header(io.headers, "%s: %s", priv->config->http_io_params->storage_class_header, priv->config->http_io_params->storage_class_headerval);
+	}
 
         /* Add Authorization header */
         if ((r = http_io_add_auth(priv, &io, now, io.src, io.buf_size)) != 0)
@@ -866,7 +888,7 @@ static int
 update_iam_credentials(struct http_io_private *const priv)
 {
     struct http_io_conf *const config = priv->config;
-    char urlbuf[sizeof(EC2_IAM_META_DATA_URLBASE) + 128];
+    char urlbuf[sizeof(S3B_EC2_IAM_META_DATA_URLBASE) + 128];
     struct http_io io;
     char buf[2048] = { '\0' };
     char *access_id = NULL;
@@ -876,7 +898,7 @@ update_iam_credentials(struct http_io_private *const priv)
     int r;
 
     /* Build URL */
-    snprintf(urlbuf, sizeof(urlbuf), "%s%s", EC2_IAM_META_DATA_URLBASE, config->auth.u.s3.ec2iam_role);
+    snprintf(urlbuf, sizeof(urlbuf), "%s%s", S3B_EC2_IAM_META_DATA_URLBASE, config->auth.u.s3.ec2iam_role);
 
     /* Initialize I/O info */
     memset(&io, 0, sizeof(io));
@@ -899,9 +921,9 @@ update_iam_credentials(struct http_io_private *const priv)
         buflen = sizeof(buf) - 1;
     buf[buflen] = '\0';
  /* Find credentials in JSON response */
-    if ((access_id = parse_json_field(priv, buf, EC2_IAM_META_DATA_ACCESSID)) == NULL
-      || (access_key = parse_json_field(priv, buf, EC2_IAM_META_DATA_ACCESSKEY)) == NULL
-      || (iam_token = parse_json_field(priv, buf, EC2_IAM_META_DATA_TOKEN)) == NULL) {
+    if ((access_id = parse_json_field(priv, buf, S3B_EC2_IAM_META_DATA_ACCESSID)) == NULL
+      || (access_key = parse_json_field(priv, buf, S3B_EC2_IAM_META_DATA_ACCESSKEY)) == NULL
+      || (iam_token = parse_json_field(priv, buf, S3B_EC2_IAM_META_DATA_TOKEN)) == NULL) {
         (*config->log)(LOG_ERR, "failed to extract EC2 IAM credentials from response: %s", strerror(errno));
         free(access_id);
         free(access_key);
@@ -1370,7 +1392,7 @@ http_io_write_block(struct cloudbacker_store *const cb, cb_block_t block_num, co
         encoded_buf = encrypt_buf;
         encrypted = 1;
     }
- /* Set Content-Encoding HTTP header */
+    /* Set Content-Encoding HTTP header */
     if (compressed || encrypted) {
         char ebuf[128];
 
@@ -1413,24 +1435,23 @@ http_io_write_block(struct cloudbacker_store *const cb, cb_block_t block_num, co
 
     /* Add ACL header (PUT only) */
     if (src != NULL)
-        io.headers = http_io_add_header(io.headers, "%s: %s", S3B_ACL_HEADER, config->auth.u.s3.accessType);
+        io.headers = http_io_add_header(io.headers, "%s: %s", priv->config->http_io_params->acl_header,priv->config->http_io_params->acl_headerval);
 
- /* Add file size meta-data to zero'th block */
+    /* Add file size meta-data to zero'th block */
     if (src != NULL && block_num == 0) {
-        io.headers = http_io_add_header(io.headers, "%s: %u", S3B_BLOCK_SIZE_HEADER, config->block_size);
-        io.headers = http_io_add_header(io.headers, "%s: %ju",
-          S3B_FILE_SIZE_HEADER, (uintmax_t)(config->block_size * config->num_blocks));
-        io.headers = http_io_add_header(io.headers, "%s: %s",
-          S3B_NAME_HASH_HEADER, config->name_hash ? "yes" : "no");
+        io.headers = http_io_add_header(io.headers, "%s: %u", priv->config->http_io_params->block_size_header, priv->config->http_io_params->block_size_headerval);
+        io.headers = http_io_add_header(io.headers, "%s: %ju", priv->config->http_io_params->file_size_header, (uintmax_t)(config->block_size * config->num_blocks));
+        io.headers = http_io_add_header(io.headers, "%s: %s",priv->config->http_io_params->name_hash_header, config->name_hash ? "yes" : "no");
     }
 
     /* Add signature header (if encrypting) */
     if (src != NULL && config->encryption != NULL)
-        io.headers = http_io_add_header(io.headers, "%s: \"%s\"", S3B_HMAC_HEADER, hmacbuf);
+        io.headers = http_io_add_header(io.headers, "%s: \"%s\"", priv->config->http_io_params->HMAC_Header, hmacbuf);
 
     /* Add storage class header (if needed) */
-    if ((strcasecmp(config->storageClass, SCLASS_S3_REDUCED_REDUNDANCY)==0))
-        io.headers = http_io_add_header(io.headers, "%s: %s", S3B_STORAGE_CLASS_HEADER, SCLASS_S3_REDUCED_REDUNDANCY);
+    if (strcasecmp(config->storageClass, SCLASS_S3_REDUCED_REDUNDANCY)==0){
+	 io.headers = http_io_add_header(io.headers, "%s: %s", priv->config->http_io_params->storage_class_header, priv->config->http_io_params->storage_class_headerval);
+    }
 
     /* Add Authorization header */
     if ((r = http_io_add_auth(priv, &io, now, io.src, io.buf_size)) != 0)
@@ -1673,7 +1694,7 @@ http_io_add_auth4(struct http_io_private *priv, struct http_io *const io, time_t
     /* Snapshot current credentials */
     pthread_mutex_lock(&priv->mutex);
     snprintf(access_id, sizeof(access_id), "%s", config->auth.u.s3.accessId);
-    snprintf(access_key, sizeof(access_key), "%s%s", ACCESS_KEY_PREFIX, config->auth.u.s3.accessKey);
+    snprintf(access_key, sizeof(access_key), "%s%s", S3B_ACCESS_KEY_PREFIX, config->auth.u.s3.accessKey);
     snprintf(iam_token, sizeof(iam_token), "%s", config->auth.u.s3.iam_token != NULL ? config->auth.u.s3.iam_token : "");
     pthread_mutex_unlock(&priv->mutex);
 
@@ -1710,7 +1731,7 @@ http_io_add_auth4(struct http_io_private *priv, struct http_io *const io, time_t
 /****** Add IAM security token header (if any) ******/
 
     if (*iam_token != '\0')
-        io->headers = http_io_add_header(io->headers, "%s: %s", SECURITY_TOKEN_HEADER, iam_token);
+        io->headers = http_io_add_header(io->headers, "%s: %s", S3B_SECURITY_TOKEN_HEADER, iam_token);
 
 /****** Create Hashed Canonical Request ******/
 
@@ -1847,18 +1868,18 @@ http_io_add_auth4(struct http_io_private *priv, struct http_io *const io, time_t
     (*config->log)(LOG_DEBUG, "auth: HMAC[%s] = %s", config->region, hmac_buf);
 #endif
     HMAC_Init_ex(&hmac_ctx, hmac, hmac_len, EVP_sha256(), NULL);
-    HMAC_Update(&hmac_ctx, (const u_char *)S3_SERVICE_NAME, strlen(S3_SERVICE_NAME));
+    HMAC_Update(&hmac_ctx, (const u_char *)S3B_SERVICE_NAME, strlen(S3B_SERVICE_NAME));
     HMAC_Final(&hmac_ctx, hmac, &hmac_len);
 #if DEBUG_AUTHENTICATION
     http_io_prhex(hmac_buf, hmac, hmac_len);
-    (*config->log)(LOG_DEBUG, "auth: HMAC[%s] = %sn", S3_SERVICE_NAME, hmac_buf);
+    (*config->log)(LOG_DEBUG, "auth: HMAC[%s] = %sn", S3B_SERVICE_NAME, hmac_buf);
 #endif
     HMAC_Init_ex(&hmac_ctx, hmac, hmac_len, EVP_sha256(), NULL);
-    HMAC_Update(&hmac_ctx, (const u_char *)SIGNATURE_TERMINATOR, strlen(SIGNATURE_TERMINATOR));
+    HMAC_Update(&hmac_ctx, (const u_char *)S3B_SIGNATURE_TERMINATOR, strlen(S3B_SIGNATURE_TERMINATOR));
     HMAC_Final(&hmac_ctx, hmac, &hmac_len);
 #if DEBUG_AUTHENTICATION
     http_io_prhex(hmac_buf, hmac, hmac_len);
-    (*config->log)(LOG_DEBUG, "auth: HMAC[%s] = %s", SIGNATURE_TERMINATOR, hmac_buf);
+    (*config->log)(LOG_DEBUG, "auth: HMAC[%s] = %s", S3B_SIGNATURE_TERMINATOR, hmac_buf);
 #endif
 /****** Sign the String To Sign ******/
 
@@ -1866,10 +1887,10 @@ http_io_add_auth4(struct http_io_private *priv, struct http_io *const io, time_t
     *sigbuf = '\0';
 #endif
     HMAC_Init_ex(&hmac_ctx, hmac, hmac_len, EVP_sha256(), NULL);
-    HMAC_Update(&hmac_ctx, (const u_char *)SIGNATURE_ALGORITHM, strlen(SIGNATURE_ALGORITHM));
+    HMAC_Update(&hmac_ctx, (const u_char *)S3B_SIGNATURE_ALGORITHM, strlen(S3B_SIGNATURE_ALGORITHM));
     HMAC_Update(&hmac_ctx, (const u_char *)"\n", 1);
 #if DEBUG_AUTHENTICATION
-    snprintf(sigbuf + strlen(sigbuf), sizeof(sigbuf) - strlen(sigbuf), "%s\n", SIGNATURE_ALGORITHM);
+    snprintf(sigbuf + strlen(sigbuf), sizeof(sigbuf) - strlen(sigbuf), "%s\n", S3B_SIGNATURE_ALGORITHM);
 #endif
     HMAC_Update(&hmac_ctx, (const u_char *)datebuf, strlen(datebuf));
     HMAC_Update(&hmac_ctx, (const u_char *)"\n", 1);
@@ -1880,13 +1901,13 @@ http_io_add_auth4(struct http_io_private *priv, struct http_io *const io, time_t
     HMAC_Update(&hmac_ctx, (const u_char *)"/", 1);
     HMAC_Update(&hmac_ctx, (const u_char *)config->region, strlen(config->region));
     HMAC_Update(&hmac_ctx, (const u_char *)"/", 1);
-    HMAC_Update(&hmac_ctx, (const u_char *)S3_SERVICE_NAME, strlen(S3_SERVICE_NAME));
+    HMAC_Update(&hmac_ctx, (const u_char *)S3B_SERVICE_NAME, strlen(S3B_SERVICE_NAME));
     HMAC_Update(&hmac_ctx, (const u_char *)"/", 1);
-    HMAC_Update(&hmac_ctx, (const u_char *)SIGNATURE_TERMINATOR, strlen(SIGNATURE_TERMINATOR));
+    HMAC_Update(&hmac_ctx, (const u_char *)S3B_SIGNATURE_TERMINATOR, strlen(S3B_SIGNATURE_TERMINATOR));
     HMAC_Update(&hmac_ctx, (const u_char *)"\n", 1);
 #if DEBUG_AUTHENTICATION
     snprintf(sigbuf + strlen(sigbuf), sizeof(sigbuf) - strlen(sigbuf), "%.8s/%s/%s/%s\n",
-      datebuf, config->region, S3_SERVICE_NAME, SIGNATURE_TERMINATOR);
+      datebuf, config->region, S3B_SERVICE_NAME, S3B_SIGNATURE_TERMINATOR);
 #endif
     HMAC_Update(&hmac_ctx, (const u_char *)creq_hash_buf, strlen(creq_hash_buf));
 #if DEBUG_AUTHENTICATION
@@ -1903,7 +1924,7 @@ http_io_add_auth4(struct http_io_private *priv, struct http_io *const io, time_t
 /****** Add Authorization Header ******/
 
     io->headers = http_io_add_header(io->headers, "%s: %s Credential=%s/%.8s/%s/%s/%s, SignedHeaders=%s, Signature=%s",
-      AUTH_HEADER, SIGNATURE_ALGORITHM, access_id, datebuf, config->region, S3_SERVICE_NAME, SIGNATURE_TERMINATOR,
+      AUTH_HEADER, S3B_SIGNATURE_ALGORITHM, access_id, datebuf, config->region, S3B_SERVICE_NAME, S3B_SIGNATURE_TERMINATOR,
       header_names, hmac_buf);
 
     /* Done */
@@ -2964,3 +2985,71 @@ fail:
    signed_buf = NULL;
    return 1;
 }
+
+/*
+ * Initialize all http parameters which will be used in http requests to perform cloudbacker_store functions,
+ * as per the storage type.
+ */
+static void 
+set_http_io_params(struct http_io_private *priv){
+
+    if(priv->config->storage_prefix == GS_STORAGE){
+        strcpy(priv->config->http_io_params->file_size_header, GSB_FILE_SIZE_HEADER);
+        strcpy(priv->config->http_io_params->block_size_header, GSB_BLOCK_SIZE_HEADER);
+        priv->config->http_io_params->block_size_headerval = priv->config->block_size;
+        strcpy(priv->config->http_io_params->HMAC_Header, GSB_HMAC_HEADER);
+        strcpy(priv->config->http_io_params->acl_header,GSB_ACL_HEADER);
+        strcpy(priv->config->http_io_params->acl_headerval,priv->config->auth.u.gs.accessType);
+        strcpy(priv->config->http_io_params->content_sha256_header, GSB_CONTENT_SHA256_HEADER);
+        strcpy(priv->config->http_io_params->storage_class_header, GSB_STORAGE_CLASS_HEADER);
+        if( strcasecmp(priv->config->storageClass, SCLASS_GS_NEARLINE) == 0)
+            strcpy(priv->config->http_io_params->storage_class_headerval, SCLASS_GS_NEARLINE);
+        else if( strcasecmp(priv->config->storageClass, SCLASS_GS_DRA) == 0)
+            strcpy(priv->config->http_io_params->storage_class_headerval, SCLASS_GS_DRA);
+	else
+            strcpy(priv->config->http_io_params->storage_class_headerval, SCLASS_STANDARD);     
+        if ( (strcasecmp(priv->config->auth.u.gs.authVersion, AUTH_VERSION_AWS2) == 0)||
+             (strcasecmp(priv->config->auth.u.gs.authVersion, AUTH_VERSION_OAUTH2) == 0) ){
+	         strcpy(priv->config->http_io_params->date_header, HTTP_DATE_HEADER);
+        	 strcpy(priv->config->http_io_params->date_buf_fmt,HTTP_DATE_BUF_FMT);
+	}	
+        strcpy(priv->config->http_io_params->name_hash_header, GSB_NAME_HASH_HEADER); 
+        strcpy(priv->config->http_io_params->cb_domain, GS_DOMAIN);
+    }
+    else if(priv->config->storage_prefix == S3_STORAGE){
+        strcpy(priv->config->http_io_params->file_size_header, S3B_FILE_SIZE_HEADER);
+        strcpy(priv->config->http_io_params->block_size_header, S3B_BLOCK_SIZE_HEADER);
+        priv->config->http_io_params->block_size_headerval = priv->config->block_size;
+        strcpy(priv->config->http_io_params->HMAC_Header, S3B_HMAC_HEADER);
+        strcpy(priv->config->http_io_params->acl_header,S3B_ACL_HEADER);
+        strcpy(priv->config->http_io_params->acl_headerval,priv->config->auth.u.s3.accessType);
+        strcpy(priv->config->http_io_params->content_sha256_header, S3B_CONTENT_SHA256_HEADER);
+        strcpy(priv->config->http_io_params->storage_class_header, S3B_STORAGE_CLASS_HEADER);
+        if( strcasecmp(priv->config->storageClass, SCLASS_S3_REDUCED_REDUNDANCY) == 0)
+            strcpy(priv->config->http_io_params->storage_class_headerval, SCLASS_S3_REDUCED_REDUNDANCY);
+        else
+            strcpy(priv->config->http_io_params->storage_class_headerval, SCLASS_STANDARD);
+    
+        if (strcasecmp(priv->config->auth.u.s3.authVersion, AUTH_VERSION_AWS2) == 0){
+    	    strcpy(priv->config->http_io_params->date_header, HTTP_DATE_HEADER);
+            strcpy(priv->config->http_io_params->date_buf_fmt,HTTP_DATE_BUF_FMT);
+	}
+        else{
+	    strcpy(priv->config->http_io_params->date_header,  AWS_DATE_HEADER);
+	    strcpy(priv->config->http_io_params->date_buf_fmt, AWS_DATE_BUF_FMT);
+	}	
+	strcpy(priv->config->http_io_params->signature_algorithm,S3B_SIGNATURE_ALGORITHM);
+	strcpy(priv->config->http_io_params->accessKey_prefix, S3B_ACCESS_KEY_PREFIX);
+	strcpy(priv->config->http_io_params->service_name, S3B_SERVICE_NAME);
+	strcpy(priv->config->http_io_params->signature_terminator, S3B_SIGNATURE_TERMINATOR);
+	strcpy(priv->config->http_io_params->security_token_header, S3B_SECURITY_TOKEN_HEADER);
+	strcpy(priv->config->http_io_params->ec2_iam_meta_data_urlbase, S3B_EC2_IAM_META_DATA_URLBASE);
+	strcpy(priv->config->http_io_params->ec2_iam_meta_data_accessID, S3B_EC2_IAM_META_DATA_ACCESSID);
+	strcpy(priv->config->http_io_params->ec2_iam_meta_data_accessKey, S3B_EC2_IAM_META_DATA_ACCESSKEY);
+	strcpy(priv->config->http_io_params->ec2_iam_meta_data_token, S3B_EC2_IAM_META_DATA_TOKEN);
+        strcpy(priv->config->http_io_params->name_hash_header, S3B_NAME_HASH_HEADER);
+	strcpy(priv->config->http_io_params->cb_domain, S3_DOMAIN);
+    }	
+}
+
+

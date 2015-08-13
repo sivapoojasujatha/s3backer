@@ -164,6 +164,33 @@ struct curl_holder {
     LIST_ENTRY(curl_holder)     link;
 };
 
+/* structure holds all http parameters used in cloudbacker store http reqests as per storage type */
+typedef struct http_io_parameters{
+    char file_size_header[32];
+    char block_size_header[32];
+    u_int block_size_headerval;
+    char HMAC_Header[32];       
+    char HMAC_Headerval[32];
+    char name_hash_header[32];
+    char acl_header[32];
+    char acl_headerval[64];
+    char content_sha256_header[24];
+    char storage_class_header[24];
+    char storage_class_headerval[32];
+    char date_header[24];
+    char date_buf_fmt[64];
+    char signature_algorithm[32];
+    char accessKey_prefix[16];
+    char service_name[32];
+    char signature_terminator[16];
+    char security_token_header[32];
+    char ec2_iam_meta_data_urlbase[96];
+    char ec2_iam_meta_data_accessID[16];
+    char ec2_iam_meta_data_accessKey[24];
+    char ec2_iam_meta_data_token[8];
+    char cb_domain[24];      
+}http_io_parameters;
+
 struct http_io_private {
     struct http_io_conf         *config;
     struct http_io_stats        stats;
@@ -241,7 +268,8 @@ struct http_io {
 
 /* Generic configuration info structure for http_io store */
 struct http_io_conf {
-    struct auth_conf	auth;
+    struct auth_conf	      auth;
+    struct http_io_parameters *http_io_params;
     char		*accessId;
     char		*accessKey;
     char		*ec2iam_role;

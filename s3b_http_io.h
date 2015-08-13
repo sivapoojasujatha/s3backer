@@ -25,9 +25,12 @@
 
 #include "http_gio.h"
 
+/* S3 base URL / Host */
+#define S3_DOMAIN                      "amazonaws.com"            /* S3 URL */
+
 /* Authentication types */
-#define AUTH_VERSION_AWS2   "aws2"
-#define AUTH_VERSION_AWS4   "aws4"
+#define AUTH_VERSION_AWS2              "aws2"
+#define AUTH_VERSION_AWS4              "aws4"
 
 /* S3-specific HTTP definitions */
 #define S3B_FILE_SIZE_HEADER            "x-amz-meta-s3backer-filesize"
@@ -39,26 +42,21 @@
 #define S3B_STORAGE_CLASS_HEADER        "x-amz-storage-class"
 
 /* AWS 4 `Date' and `x-amz-date' header formats */
-#define AWS_DATE_HEADER             "x-amz-date"
-#define AWS_DATE_BUF_FMT            "%Y%m%dT%H%M%SZ"
+#define AWS_DATE_HEADER                 "x-amz-date"
+#define AWS_DATE_BUF_FMT                "%Y%m%dT%H%M%SZ"
 
 /* AWS signature */
-#define SIGNATURE_ALGORITHM         "AWS4-HMAC-SHA256"
-#define ACCESS_KEY_PREFIX           "AWS4"
-#define S3_SERVICE_NAME             "s3"
-#define SIGNATURE_TERMINATOR        "aws4_request"
-#define SECURITY_TOKEN_HEADER       "x-amz-security-token"
+#define S3B_SIGNATURE_ALGORITHM         "AWS4-HMAC-SHA256"
+#define S3B_ACCESS_KEY_PREFIX           "AWS4"
+#define S3B_SERVICE_NAME                "s3"
+#define S3B_SIGNATURE_TERMINATOR        "aws4_request"
+#define S3B_SECURITY_TOKEN_HEADER       "x-amz-security-token"
 
 /* EC2 IAM info URL */
-#define EC2_IAM_META_DATA_URLBASE   "http://169.254.169.254/latest/meta-data/iam/security-credentials/"
-#define EC2_IAM_META_DATA_ACCESSID  "AccessKeyId"
-#define EC2_IAM_META_DATA_ACCESSKEY "SecretAccessKey"
-#define EC2_IAM_META_DATA_TOKEN     "Token"
+#define S3B_EC2_IAM_META_DATA_URLBASE   "http://169.254.169.254/latest/meta-data/iam/security-credentials/"
+#define S3B_EC2_IAM_META_DATA_ACCESSID  "AccessKeyId"
+#define S3B_EC2_IAM_META_DATA_ACCESSKEY "SecretAccessKey"
+#define S3B_EC2_IAM_META_DATA_TOKEN     "Token"
 
-/* http_gio.c 
-extern struct cloudbacker_store *http_io_create(struct http_io_conf *config);
-extern void http_io_get_stats(struct cloudbacker_store *cb, struct http_io_stats *stats);
-extern int http_io_parse_block(struct http_io_conf *config, const char *name, cb_block_t *block_num);
-*/
 
 #endif
