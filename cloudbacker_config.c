@@ -58,10 +58,6 @@
 #define CLOUDBACKER_DEFAULT_ENCRYPTION                 "AES-128-CBC"
 
 
-/* Storage base URLs */
-#define S3_DOMAIN                                   "amazonaws.com"            /* S3 URL */
-#define GS_DOMAIN                                   "storage.googleapis.com"   /* GS URL */
-
 /* Storage bucket prefix */
 #define S3_BUCKET_PREFIX  			   "s3://"                      /* Amazon bucket s3://mybucket */
 #define GS_BUCKET_PREFIX			   "gs://"                      /* Google cloud storage bucket gs://mybucket */
@@ -197,6 +193,7 @@ static struct cb_config config = {
         .baseURL=                       NULL,
         .region=                        NULL,
         .bucket=                        NULL,
+        .maxKeys=                       LIST_BLOCKS_CHUNK, /* Max blocks to be listed at a time */
         .prefix=                        CLOUDBACKER_DEFAULT_PREFIX,
 	.name_hash=	                0,
         .user_agent=                    user_agent_buf,
@@ -416,6 +413,10 @@ static const struct fuse_opt option_list[] = {
     {
         .templ=     "--minWriteDelay=%u",
         .offset=    offsetof(struct cb_config, ec_protect.min_write_delay),
+    },
+    {
+        .templ=     "--maxKeys=%u",
+        .offset=    offsetof(struct cb_config, http_io.maxKeys),
     },
     {
         .templ=     "--prefix=%s",
@@ -1007,7 +1008,12 @@ validate_config(void)
             return -1;
         }
     }
-
+   
+    /* check user specified maxKeys value */
+    if(config.http_io.maxKeys == 0){
+       warnx("invalid maxKeys value. It should be a positive integer. Using default value %u", LIST_BLOCKS_CHUNK);
+       config.http_io.maxKeys = LIST_BLOCKS_CHUNK;
+    } 
 
     /* Read credentials from accessFile or through command line arguments accessId and accesskey */
     if( validate_credentials() != 0){
@@ -1835,6 +1841,7 @@ dump_config(void)
     (*config.log)(LOG_DEBUG, "%24s: \"%s\"", "region", config.http_io.region);
     (*config.log)(LOG_DEBUG, "%24s: \"%s\"", config.test ? "testdir" : "bucket", config.http_io.bucket);
     (*config.log)(LOG_DEBUG, "%24s: \"%s\"", "storageClass", config.http_io.storageClass);
+    (*config.log)(LOG_DEBUG, "%24s: %u keys", "maxKeys", config.http_io.maxKeys);
     (*config.log)(LOG_DEBUG, "%24s: \"%s\"", "prefix", config.http_io.prefix);
     (*config.log)(LOG_DEBUG, "%24s: %s", "name hash", config.http_io.name_hash ? "yes" : "no");
     (*config.log)(LOG_DEBUG, "%24s: %s", "list_blocks", config.list_blocks ? "true" : "false");
@@ -1998,6 +2005,7 @@ usage(void)
     fprintf(stderr, "\t--%-27s %s\n", "minWriteDelay=MILLIS", "Minimum time between same block writes");
     fprintf(stderr, "\t--%-27s %s\n", "password=PASSWORD", "Encrypt using PASSWORD");
     fprintf(stderr, "\t--%-27s %s\n", "passwordFile=FILE", "Encrypt using password read from FILE");
+    fprintf(stderr, "\t--%-27s %s\n", "maxKeys=NUM", "Max blocks to be listed at a time");
     fprintf(stderr, "\t--%-27s %s\n", "prefix=STRING", "Prefix for resource names within bucket");
     fprintf(stderr, "\t--%-27s %s\n", "quiet", "Omit progress output at startup");
     fprintf(stderr, "\t--%-27s %s\n", "readAhead=NUM", "Number of blocks to read-ahead");
@@ -2033,6 +2041,7 @@ usage(void)
       CLOUDBACKER_DEFAULT_FILE_MODE, CLOUDBACKER_DEFAULT_FILE_MODE_READ_ONLY);
     fprintf(stderr, "\t--%-27s %u\n", "maxRetryPause", CLOUDBACKER_DEFAULT_MAX_RETRY_PAUSE);
     fprintf(stderr, "\t--%-27s %u\n", "minWriteDelay", CLOUDBACKER_DEFAULT_MIN_WRITE_DELAY);
+    fprintf(stderr, "\t--%-27s %u\n", "maxKeys", LIST_BLOCKS_CHUNK);
     fprintf(stderr, "\t--%-27s \"%s\"\n", "prefix", CLOUDBACKER_DEFAULT_PREFIX);
     fprintf(stderr, "\t--%-27s %u\n", "readAhead", CLOUDBACKER_DEFAULT_READ_AHEAD);
     fprintf(stderr, "\t--%-27s %u\n", "readAheadTrigger", CLOUDBACKER_DEFAULT_READ_AHEAD_TRIGGER);

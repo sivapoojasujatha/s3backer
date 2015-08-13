@@ -478,7 +478,7 @@ http_io_list_blocks(struct cloudbacker_store *cb, block_list_func_t *callback, v
                      LIST_PARAM_MARKER, config->prefix, CB_BLOCK_NUM_DIGITS,
                      config->name_hash ? (uintmax_t)bit_reverse(io.last_block) : (uintmax_t)io.last_block);
         }
-        snprintf(urlbuf + strlen(urlbuf), sizeof(urlbuf) - strlen(urlbuf), "%s=%u", LIST_PARAM_MAX_KEYS, LIST_BLOCKS_CHUNK);
+        snprintf(urlbuf + strlen(urlbuf), sizeof(urlbuf) - strlen(urlbuf), "%s=%u", LIST_PARAM_MAX_KEYS, config->maxKeys);
         snprintf(urlbuf + strlen(urlbuf), sizeof(urlbuf) - strlen(urlbuf), "&%s=%s", LIST_PARAM_PREFIX, config->prefix);
 
         /* Add Date header */
@@ -2214,6 +2214,8 @@ http_io_perform_io(struct http_io_private *priv, struct http_io *io, http_io_cur
     int attempt;
     CURL *curl;
 
+    /* parser functions require valid io->config */
+    io->config = config;
     /* Debug */
     if (config->debug)
         (*config->log)(LOG_DEBUG, "%s %s", io->method, io->url);

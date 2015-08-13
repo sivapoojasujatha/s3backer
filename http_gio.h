@@ -94,7 +94,7 @@
                                       + sizeof(LIST_ELEM_KEY) + 1)
 
 /* How many blocks to list at a time */
-#define LIST_BLOCKS_CHUNK           0x100
+#define LIST_BLOCKS_CHUNK           1000
 
 /* PBKDF2 key generation iterations */
 #define PBKDF2_ITERATIONS           5000
@@ -284,6 +284,7 @@ struct http_io_conf {
     const char          *password;
     const char          *encryption;
     const char          *storageClass;
+    u_int               maxKeys;
     u_int               key_length;
     u_int		name_hash;
     int                 debug;
