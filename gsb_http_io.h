@@ -29,7 +29,7 @@
  */
 
 #define AUTH_VERSION_OAUTH2   		"oauth2"
-#define GCS_OAUTH2_ACCESS_TOKEN         "access_token"
+#define GCS_BUCKET_STORAGECLASS         "StorageClass"
 
 /* HTTP IO specific definitions */
 #define GSB_FILE_SIZE_HEADER            "x-goog-meta-gsbacker-filesize"
@@ -60,7 +60,7 @@
 
 #define JWT_CLAIMSET_ISS                "iss"
 #define JWT_CLAIMSET_SCOPE              "scope"
-#define JWT_CLAIMSET_SCOPE_VALUE        "https://www.googleapis.com/auth/devstorage.read_write"
+#define JWT_CLAIMSET_SCOPE_VALUE        "https://www.googleapis.com/auth/devstorage.full_control"
 #define JWT_CLAIMSET_AUD                "aud"
 #define JWT_CLAIMSET_AUD_VALUE          "https://www.googleapis.com/oauth2/v3/token"
 #define JWT_CLAIMSET_EXP                "exp"

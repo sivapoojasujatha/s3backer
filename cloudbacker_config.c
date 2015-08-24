@@ -963,6 +963,7 @@ validate_config(void)
     char fileSizeBuf[64];
     struct stat sb;
     char urlbuf[512];
+    char sClassBuf[64];
     int i;
     int r;
 
@@ -1315,8 +1316,14 @@ validate_config(void)
             err(1, "http_io_create");
         if (!config.quiet)
             warnx("auto-detecting block size, total file size, and name hashing setting...");
-        r = (*cb->meta_data)(cb, &auto_file_size, &auto_block_size, &auto_name_hash);
-        (*cb->destroy)(cb);
+       
+        r = (*cb->bucket_attributes)(cb, sClassBuf); 
+        /* only for GS storage slass is bucket specific */
+        if( r == 0 && config.http_io.storage_prefix == GS_STORAGE )
+            warnx("specified bucket storage class is %s", config.http_io.storageClass);
+        if( r == 0) 
+            r = (*cb->meta_data)(cb, &auto_file_size, &auto_block_size, &auto_name_hash);
+       (*cb->destroy)(cb);
     }
 
     /* Check result */
@@ -1803,7 +1810,6 @@ static int validate_storageClass(void)
          }
     }
 
-    warnx("Using storageClass '%s' ",config.http_io.storageClass);
     return 0;  
 }
 
@@ -2019,7 +2025,7 @@ usage(void)
     fprintf(stderr, "\t--%-27s %s\n", "prefix=STRING", "Prefix for resource names within bucket");
     fprintf(stderr, "\t--%-27s %s\n", "quiet", "Omit progress output at startup");
     fprintf(stderr, "\t--%-27s %s\n", "readAhead=NUM", "Number of blocks to read-ahead");
-    fprintf(stderr, "\t--%-27s %s\n", "readAheadTrigger=NUM", "# of sequentially read blocks to trigger read-ahead");
+    fprintf(stderr, "\t--%-27s %s\n", "readAheadTrigger=NUM", "# of sequentially read blocks to trigger read-ahead");    
     fprintf(stderr, "\t--%-27s %s\n", "readOnly", "Return `Read-only file system' error for write attempts");
     fprintf(stderr, "\t--%-27s %s\n", "region=region", "Specify AWS region");
     fprintf(stderr, "\t--%-27s %s\n", "reset-mounted-flag", "Reset `already mounted' flag in the filesystem");

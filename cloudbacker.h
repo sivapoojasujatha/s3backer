@@ -192,6 +192,12 @@ struct cloudbacker_store {
      * Returns zero on success or a (positive) errno value on error.
      */
     int         (*list_blocks)(struct cloudbacker_store *cb, block_list_func_t *callback, void *arg);
+    /*
+     * Get bucket attributes, currently implemented only to fetch storageClass attribute.
+     *
+     * Returns zero on success or a (positive) errno value on error.
+     */
+    int         (*bucket_attributes)(struct cloudbacker_store *cb, void *arg);
 
     /*
      * Sync any dirty data to the underlying data store.

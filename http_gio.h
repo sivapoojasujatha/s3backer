@@ -93,6 +93,9 @@
                                       + sizeof(LIST_ELEM_CONTENTS) \
                                       + sizeof(LIST_ELEM_KEY) + 1)
 
+/* query string parameter to get storage class attribute of bucket */
+#define BUCKET_PARAM_STORAGECLASS   "storageClass"
+
 /* How many blocks to list at a time */
 #define LIST_BLOCKS_CHUNK           1000
 
@@ -264,6 +267,7 @@ struct http_io {
     char                content_encoding[32];   // received content encoding
     check_cancel_t      *check_cancel;          // write check-for-cancel callback
     void                *check_cancel_arg;      // write check-for-cancel callback argument
+    char                *StorageClass;          // get storage class attribute of GS bucket
 };
 
 /* Generic configuration info structure for http_io store */

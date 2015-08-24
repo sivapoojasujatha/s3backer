@@ -45,6 +45,7 @@ static int http_io_write_block_part(struct cloudbacker_store *cb, cb_block_t blo
 static int http_io_list_blocks(struct cloudbacker_store *cb, block_list_func_t *callback, void *arg);
 static int http_io_flush(struct cloudbacker_store *cb);
 static void http_io_destroy(struct cloudbacker_store *cb);
+static int http_io_bucket_attributes(struct cloudbacker_store *cb, void *arg);
 
 /* Other functions */
 static http_io_curl_prepper_t http_io_head_prepper;
@@ -56,6 +57,7 @@ static http_io_curl_prepper_t http_io_iamcreds_prepper;
 /* S3 REST API functions */
 static void http_io_get_block_url(char *buf, size_t bufsiz, struct http_io_conf *config, cb_block_t block_num);
 static void http_io_get_mounted_flag_url(char *buf, size_t bufsiz, struct http_io_conf *config);
+static void http_io_get_bucket_url(char *buf, size_t bufsiz, struct http_io_conf *config);
 
 /* Authentication functions */
 static char *create_jwt_token(const char *gcs_clientId);
@@ -165,6 +167,7 @@ http_io_create(struct http_io_conf *config)
     cb->list_blocks = http_io_list_blocks;
     cb->flush = http_io_flush;
     cb->destroy = http_io_destroy;
+    cb->bucket_attributes = http_io_bucket_attributes;
 
     if ((priv = calloc(1, sizeof(*priv))) == NULL) {
         r = errno;
@@ -419,6 +422,72 @@ static cb_block_t bit_reverse(cb_block_t block_num)
     return reversed_block_num;
 }
 
+static int http_io_bucket_attributes(struct cloudbacker_store *cb, void *arg)
+{
+    struct http_io_private *const priv = cb->data;
+    struct http_io_conf *const config = priv->config;
+    char urlbuf[URL_BUF_SIZE(config) + sizeof(BUCKET_PARAM_STORAGECLASS)];
+    const time_t now = time(NULL);
+    struct http_io io;
+    int r;
+    char buf[2048] = { '\0' };
+    size_t buflen;
+    
+    /* Nothing to do if s3 bucket */
+    if(config->storage_prefix == S3_STORAGE){
+       return 0;
+    }
+
+    /* Initialize I/O info */
+    memset(&io, 0, sizeof(io));
+    io.header_parser = cb_header_parser;
+    io.url = urlbuf;
+    io.method = HTTP_GET;
+    io.dest = buf;
+    io.buf_size = sizeof(buf);
+
+
+    /* Construct URL for the first block */
+    http_io_get_bucket_url(urlbuf, sizeof(urlbuf), config);
+
+    /* prepare url for http request */
+    snprintf(urlbuf + strlen(urlbuf), strlen(BUCKET_PARAM_STORAGECLASS)+2, "?%s", BUCKET_PARAM_STORAGECLASS);
+
+    /* Add Date header */
+    http_io_add_date(priv, &io, now);
+
+    /* Add Authorization header */
+    if ((r = http_io_add_auth(priv, &io, now, NULL, 0)) != 0)
+        goto done;
+
+    /* Perform operation */
+    if ((r = http_io_perform_io(priv, &io, http_io_read_prepper)) != 0)
+    {
+       printf("\n http_io_perform_io returned %d", r);
+       goto done;
+    }
+
+    /* buf format <?xml version="1.0" encoding="UTF-8"?><StorageClass>NEARLINE</StorageClass> */
+    buflen = io.buf_size - io.bufs.rdremain;
+    if (buflen > sizeof(buf) - 1)
+        buflen = sizeof(buf) - 1;
+    buf[buflen] = '\0';
+   
+    /* If xml response is nothaving the storageClass specified by user */
+    if(strcasestr(buf,config->storageClass) == NULL){
+        (*config->log)(LOG_ERR, "Incompatible storageClass specified. ");
+        curl_slist_free_all(io.headers);
+        return EINVAL;
+    }
+
+done:
+    /*  Clean up */
+    curl_slist_free_all(io.headers);
+    return r;
+
+}
+
+
 static int
 http_io_list_blocks(struct cloudbacker_store *cb, block_list_func_t *callback, void *arg)
 {
@@ -480,7 +549,7 @@ http_io_list_blocks(struct cloudbacker_store *cb, block_list_func_t *callback, v
         }
         snprintf(urlbuf + strlen(urlbuf), sizeof(urlbuf) - strlen(urlbuf), "%s=%u", LIST_PARAM_MAX_KEYS, config->maxKeys);
         snprintf(urlbuf + strlen(urlbuf), sizeof(urlbuf) - strlen(urlbuf), "&%s=%s", LIST_PARAM_PREFIX, config->prefix);
-
+        
         /* Add Date header */
         http_io_add_date(priv, &io, now);
 
@@ -734,7 +803,7 @@ http_io_meta_data(struct cloudbacker_store *cb, off_t *file_sizep, u_int *block_
     char urlbuf[URL_BUF_SIZE(config)];
     const time_t now = time(NULL);
     struct http_io io;
-    int r;
+    int r = 0;
 
     /* Initialize I/O info */
     memset(&io, 0, sizeof(io));
@@ -812,7 +881,7 @@ http_io_set_mounted(struct cloudbacker_store *cb, int *old_valuep, int new_value
             goto done;
         }
     }
-/* Set new value */
+    /* Set new value */
     if (new_value != -1) {
         char content[_POSIX_HOST_NAME_MAX + DATE_BUF_SIZE + 32];
         u_char md5[MD5_DIGEST_LENGTH];
@@ -833,9 +902,10 @@ http_io_set_mounted(struct cloudbacker_store *cb, int *old_valuep, int new_value
             struct tm tm;
 
             /* Create content for the mounted flag object (timestamp) */
-            gethostname(content, sizeof(content - 1));
+            gethostname(content, sizeof(content) - 1);
             content[sizeof(content) - 1] = '\0';
-            strftime(content + strlen(content), sizeof(content) - strlen(content), "\n" AWS_DATE_BUF_FMT "\n", gmtime_r(&now, &tm));
+            /* For simplicity, lets use HTTP date format for both s3 and gs, only for this request */
+            strftime(content + strlen(content), sizeof(content) - strlen(content), "\n"  HTTP_DATE_BUF_FMT "\n" , gmtime_r(&now, &tm));
             io.src = content;
             io.buf_size = strlen(content);
             MD5_Init(&ctx);
@@ -1960,6 +2030,25 @@ http_io_get_block_url(char *buf, size_t bufsiz, struct http_io_conf *config, cb_
     (void)len;                  /* avoid compiler warning when NDEBUG defined */
     assert(len < bufsiz);
 }
+
+/*
+ * Create URL for a bucket, and return pointer to the URL's URI path.
+ */
+
+static void
+http_io_get_bucket_url(char *buf, size_t bufsiz, struct http_io_conf *config)
+{
+    int len;
+
+    if (config->vhost)
+        len = snprintf(buf, bufsiz, "%s%s", config->baseURL, config->bucket);
+    else
+        len = snprintf(buf, bufsiz, "%s%s/", config->baseURL, config->bucket);
+    (void)len;                  /* avoid compiler warning when NDEBUG defined */
+    assert(len < bufsiz);
+
+}
+
 
 /*
  * Create URL for the mounted flag, and return pointer to the URL's path not including any "/bucket" prefix.
