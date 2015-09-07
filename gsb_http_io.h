@@ -48,9 +48,7 @@
 
 /* JWT constants */
 
-/*
- * JWT header format    {"alg":"RS256","typ":"JWT"}
- */
+/** JWT header format    {"alg":"RS256","typ":"JWT"} **/
 
 #define JWT_HEADER_ALG                  "alg"
 #define JWT_HEADER_RS256                "RS256"
@@ -70,9 +68,23 @@
 #define JWT_CLAIMSET_BUF_LEN            512      // maximum buffer size required to hold claimset buffer
 
 #define GS_DOMAIN                       "storage.googleapis.com"
-#define AUTH_VERSION_OAUTH2   		    "oauth2"
+#define AUTH_VERSION_OAUTH2             "oauth2"
 
 #define JWT_AUTH_DEFAULT_PASSWORD       "notasecret"
 #define GCS_OAUTH2_ACCESS_TOKEN         "access_token"
+
+/* Adds authorization header to http request */
+int http_io_add_oAuth2(struct http_io_private *priv, struct http_io *io, time_t now, const void *payload, size_t plen);
+
+/* Destroy */
+void set_http_io_gsb_params(struct http_io_conf *config);
+void http_io_gcs_destroy(struct http_io_private *const priv);
+
+/* Updates authentication information */
+int update_gcs_credentials(struct http_io_private *const priv);
+
+/* To get storageClass bucket attribute */
+int http_io_gcs_bucket_attributes(struct cloudbacker_store *cb, void *arg);
+
 
 #endif

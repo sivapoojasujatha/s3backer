@@ -167,33 +167,6 @@ struct curl_holder {
     LIST_ENTRY(curl_holder)     link;
 };
 
-/* structure holds all http parameters used in cloudbacker store http reqests as per storage type */
-typedef struct http_io_parameters{
-    char file_size_header[32];
-    char block_size_header[32];
-    u_int block_size_headerval;
-    char HMAC_Header[32];       
-    char HMAC_Headerval[32];
-    char name_hash_header[32];
-    char acl_header[32];
-    char acl_headerval[64];
-    char content_sha256_header[24];
-    char storage_class_header[24];
-    char storage_class_headerval[32];
-    char date_header[24];
-    char date_buf_fmt[64];
-    char signature_algorithm[32];
-    char accessKey_prefix[16];
-    char service_name[32];
-    char signature_terminator[16];
-    char security_token_header[32];
-    char ec2_iam_meta_data_urlbase[96];
-    char ec2_iam_meta_data_accessID[16];
-    char ec2_iam_meta_data_accessKey[24];
-    char ec2_iam_meta_data_token[8];
-    char cb_domain[24];      
-}http_io_parameters;
-
 struct http_io_private {
     struct http_io_conf         *config;
     struct http_io_stats        stats;
@@ -306,6 +279,12 @@ struct http_io_conf {
     u_int               max_retry_pause;
     uintmax_t           max_speed[2];
     log_func_t          *log;
+    
+    /* http io layer function pointers to invoke storage specific function implementation */
+    void (*set_http_io_params)(struct http_io_conf *config);
+    void (*destroy_auth_threads)(struct http_io_private *const priv);
+    int (*update_auth_threads)(struct http_io_private *const priv);
+    int (*authenticate)(struct http_io_private *priv, struct http_io *const io, time_t now, const void *payload, size_t plen);
 };
 
 /* http_gio.c */
@@ -314,25 +293,65 @@ extern void http_io_get_stats(struct cloudbacker_store *cb, struct http_io_stats
 extern int http_io_parse_block(struct http_io_conf *config, const char *name, cb_block_t *block_num);
 
 
-/* CURL prepper functions 
+/* CURL prepper function type */
 typedef void http_io_curl_prepper_t(CURL *curl, struct http_io *io);
 
-void http_io_head_prepper(CURL *curl, struct http_io *io);
-void http_io_read_prepper(CURL *curl, struct http_io *io);
-void http_io_write_prepper(CURL *curl, struct http_io *io);
-void http_io_list_prepper(CURL *curl, struct http_io *io);
+/* Authentication functions */
+int update_credentials(struct http_io_private *const priv);
+void* update_credentials_main(void *args);
+int http_io_add_auth(struct http_io_private *priv, struct http_io *io, time_t now, const void *payload, size_t plen);
 
-// Generic http transport functionality 
+/* parse http json response */
+char* parse_json_field(struct http_io_private *priv, const char *json, const char *field);
+
+/* Other functions */
+http_io_curl_prepper_t http_io_head_prepper;
+http_io_curl_prepper_t http_io_read_prepper;
+http_io_curl_prepper_t http_io_write_prepper;
+http_io_curl_prepper_t http_io_list_prepper;
+
+
+/* REST API functions */
+void http_io_get_block_url(char *buf, size_t bufsiz, struct http_io_conf *config, cb_block_t block_num);
+void http_io_get_mounted_flag_url(char *buf, size_t bufsiz, struct http_io_conf *config);
+void http_io_get_bucket_url(char *buf, size_t bufsiz, struct http_io_conf *config);
+
+/* Bucket listing functions */
+size_t http_io_curl_list_reader(const void *ptr, size_t size, size_t nmemb, void *stream);
+void http_io_list_elem_start(void *arg, const XML_Char *name, const XML_Char **atts);
+void http_io_list_elem_end(void *arg, const XML_Char *name);
+void http_io_list_text(void *arg, const XML_Char *s, int len);
+
+/* HTTP and curl functions */
 int http_io_perform_io(struct http_io_private *priv, struct http_io *io, http_io_curl_prepper_t *prepper);
-
 size_t http_io_curl_reader(const void *ptr, size_t size, size_t nmemb, void *stream);
 size_t http_io_curl_writer(void *ptr, size_t size, size_t nmemb, void *stream);
 size_t http_io_curl_header(void *ptr, size_t size, size_t nmemb, void *stream);
 struct curl_slist *http_io_add_header(struct curl_slist *headers, const char *fmt, ...)
     __attribute__ ((__format__ (__printf__, 2, 3)));
-size_t http_io_curl_list_reader(const void *ptr, size_t size, size_t nmemb, void *stream);
-
+void http_io_add_date(struct http_io_private *priv, struct http_io *const io, time_t now);
 CURL *http_io_acquire_curl(struct http_io_private *priv, struct http_io *io);
 void http_io_release_curl(struct http_io_private *priv, CURL **curlp, int may_cache);
-*/
+
+/* encoding, encryption, parsing etc utility functions */
+void http_io_base64_encode(char *buf, size_t bufsiz, const void *data, size_t len);
+void update_hmac_from_header(HMAC_CTX *ctx, struct http_io *io,
+  const char *name, int value_only, char *sigbuf, size_t sigbuflen);
+u_int http_io_crypt(struct http_io_private *priv, cb_block_t block_num, int enc, const u_char *src, u_int len, u_char *dst);
+void http_io_authsig(struct http_io_private *priv, cb_block_t block_num, const u_char *src, u_int len, u_char *hmac);
+int http_io_is_zero_block(const void *data, u_int block_size);
+int http_io_parse_hex(const char *str, u_char *buf, u_int nbytes);
+void http_io_prhex(char *buf, const u_char *data, size_t len);
+int http_io_strcasecmp_ptr(const void *ptr1, const void *ptr2);
+
+
+/* Parser functions */
+void file_size_parser(char *buf, struct http_io *io);
+void block_size_parser(char *buf, struct http_io *io);
+void name_hash_parser(char *buf, struct http_io *io);
+void etag_parser(char *buf, struct http_io *io);
+void hmac_parser(char *buf, struct http_io *io);
+void encoding_parser(char *buf, struct http_io *io);
+
+
 #endif

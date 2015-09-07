@@ -24,9 +24,8 @@
 #include "block_cache.h"
 #include "ec_protect.h"
 #include "fuse_ops.h"
-#include "s3b_http_io.h"
-#include "test_io.h"
 #include "cloudbacker_config.h"
+#include "test_io.h"
 #include "erase.h"
 
 #define BLOCKS_PER_DOT          0x100

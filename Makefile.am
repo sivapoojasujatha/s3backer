@@ -60,7 +60,9 @@ cloudbacker_SOURCES=   main.c \
 		    cloudbacker_config.c \
 		    test_io.c \
 		    gitrev.c \
-		    http_gio.c
+		    http_gio.c \
+                   gsb_http_io.c \
+                   s3b_http_io.c
 
 tester_SOURCES=     tester.c \
 		    block_cache.c \
@@ -73,7 +75,9 @@ tester_SOURCES=     tester.c \
 		    cloudbacker_config.c \
 		    test_io.c \
 		    gitrev.c \
-		    http_gio.c
+		    http_gio.c \
+                   gsb_http_io.c \
+                   s3b_http_io.c
 
 AM_CFLAGS=          $(FUSE_CFLAGS)
 

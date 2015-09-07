@@ -24,10 +24,10 @@
 #include "block_cache.h"
 #include "ec_protect.h"
 #include "fuse_ops.h"
+#include "cloudbacker_config.h"
 #include "gsb_http_io.h"
 #include "s3b_http_io.h"
 #include "test_io.h"
-#include "cloudbacker_config.h"
 
 /****************************************************************************
  *                          DEFINITIONS                                     *
@@ -127,7 +127,7 @@ static void list_blocks_callback(void *arg, cb_block_t block_num);
 static void dump_config(void);
 static void usage(void);
 
-/* Commadn line arguments validation functions */
+/* Command line arguments validation functions */
 static int validate_credentials(void);
 static int validate_authVersion(void);
 static int validate_accessType(void);
@@ -1530,7 +1530,7 @@ validate_config(void)
 
         /* Logging */
         if (!config.quiet) {
-            fprintf(stderr, "cloudbacker: listing non-zero blocks...");
+            fprintf(stderr, "cloudbacker: listing non-zero blocks...\n");
             fflush(stderr);
         }
 

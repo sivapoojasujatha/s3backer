@@ -58,5 +58,17 @@
 #define S3B_EC2_IAM_META_DATA_ACCESSKEY "SecretAccessKey"
 #define S3B_EC2_IAM_META_DATA_TOKEN     "Token"
 
+/* EC2 IAM thread */
+int update_iam_credentials(struct http_io_private *priv);
+
+/* Authentication functions */
+int http_io_add_auth2(struct http_io_private *priv, struct http_io *io, time_t now, const void *payload, size_t plen);
+int http_io_add_auth4(struct http_io_private *priv, struct http_io *io, time_t now, const void *payload, size_t plen);
+
+/* S3 specific functions */
+void set_http_io_s3b_params(struct http_io_conf *config);
+void http_io_s3_destroy(struct http_io_private *const priv);
+int http_io_s3b_bucket_attributes(struct cloudbacker_store *cb, void *arg);
+
 
 #endif

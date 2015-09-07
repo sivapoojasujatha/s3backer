@@ -20,8 +20,8 @@
  * 02110-1301, USA.
  */
 
-#ifndef S3B_CONFIG_H
-#define S3B_CONFIG_H
+#ifndef CB_CONFIG_H
+#define CB_CONFIG_H
 
 #include "http_gio.h"
 
