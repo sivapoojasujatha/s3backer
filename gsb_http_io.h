@@ -31,6 +31,20 @@
 #define AUTH_VERSION_OAUTH2   		"oauth2"
 #define GCS_BUCKET_STORAGECLASS         "StorageClass"
 
+/* GS specific access permission strings */
+#define GS_ACCESS_PRIVATE                           "private"
+#define GS_ACCESS_PROJECT_PRIVATE                   "project-private"
+#define GS_ACCESS_PUBLIC_READ                       "public-read"
+#define GS_ACCESS_PUBLIC_READ_WRITE                 "public-read-write"
+#define GS_ACCESS_AUTHENTICATED_READ                "authenticated-read"
+#define GS_ACCESS_BUCKET_OWNER_READ                 "bucket-owner-read"
+#define GS_ACCESS_BUCKET_OWNER_FULL_CONTROL         "bucket-owner-full-control"
+
+/* GS - Default values for some configuration parameters */
+#define GSBACKER_DEFAULT_ACCESS_TYPE                GS_ACCESS_PROJECT_PRIVATE
+#define GSBACKER_DEFAULT_AUTH_VERSION               AUTH_VERSION_OAUTH2
+#define GSBACKER_DEFAULT_REGION                     "us-east-1"                     /* TBD::Need to check and change if required */
+
 /* HTTP IO specific definitions */
 #define GSB_FILE_SIZE_HEADER            "x-goog-meta-gsbacker-filesize"
 #define GSB_BLOCK_SIZE_HEADER           "x-goog-meta-gsbacker-blocksize"

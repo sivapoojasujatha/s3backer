@@ -21,7 +21,6 @@
  */
 
 #include "cloudbacker.h"
-#include "http_gio.h"
 #include "s3b_http_io.h"
 
 

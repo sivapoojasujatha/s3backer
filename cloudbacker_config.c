@@ -63,34 +63,6 @@
 #define GS_BUCKET_PREFIX			   "gs://"                      /* Google cloud storage bucket gs://mybucket */
 #define BUCKET_PREFIX_LENGTH 			   5                            /* strlen(S3_BUCKET_PREFIX) or strlen(GS_BUCKET_PREFIX) */
 
-/* Amazon S3 specific definitions */
-
-/* S3 access permission strings */
-#define S3_ACCESS_PRIVATE                           "private"
-#define S3_ACCESS_PUBLIC_READ                       "public-read"
-#define S3_ACCESS_PUBLIC_READ_WRITE                 "public-read-write"
-#define S3_ACCESS_AUTHENTICATED_READ                "authenticated-read"
-
-/* s3 - Default values for some configuration parameters */
-#define S3BACKER_DEFAULT_ACCESS_TYPE                S3_ACCESS_PRIVATE
-#define S3BACKER_DEFAULT_AUTH_VERSION               AUTH_VERSION_AWS4
-#define S3BACKER_DEFAULT_REGION                     "us-east-1"
-
-/* Google Storage specific definitions */
-
-/* GS specific access permission strings */
-#define GS_ACCESS_PRIVATE                           "private"
-#define GS_ACCESS_PROJECT_PRIVATE                   "project-private"
-#define GS_ACCESS_PUBLIC_READ                       "public-read"
-#define GS_ACCESS_PUBLIC_READ_WRITE                 "public-read-write"
-#define GS_ACCESS_AUTHENTICATED_READ                "authenticated-read"
-#define GS_ACCESS_BUCKET_OWNER_READ		    "bucket-owner-read"
-#define GS_ACCESS_BUCKET_OWNER_FULL_CONTROL	    "bucket-owner-full-control"
-
-/* GS - Default values for some configuration parameters */
-#define GSBACKER_DEFAULT_ACCESS_TYPE                GS_ACCESS_PROJECT_PRIVATE
-#define GSBACKER_DEFAULT_AUTH_VERSION               AUTH_VERSION_OAUTH2
-#define GSBACKER_DEFAULT_REGION                     "us-east-1"                     /* TBD::Need to check and change if required */
 
 /* MacFUSE setting for kernel daemon timeout */
 #ifdef __APPLE__
@@ -129,9 +101,25 @@ static void usage(void);
 
 /* Command line arguments validation functions */
 static int validate_credentials(void);
-static int validate_authVersion(void);
-static int validate_accessType(void);
-static int validate_storageClass(void);
+static int (*set_credentials) (void);
+static int (*validate_authVersion) (void);
+static int (*validate_accessType) (void);
+static int (*validate_storageClass) (void);
+static int (*set_urlbuf) (void);
+
+/* gs specific functions */
+static int validate_gs_credentials(void);
+static int validate_gs_authVersion(void);
+static int validate_gs_accessType(void);
+static int validate_gs_storageClass(void);
+static int set_gs_urlbuf(void);
+
+/* s3 specific functions */
+static int validate_s3_credentials(void);
+static int validate_s3_authVersion(void);
+static int validate_s3_accessType(void);
+static int validate_s3_storageClass(void);
+static int set_s3_urlbuf(void);
 
 /****************************************************************************
  *                          VARIABLE DEFINITIONS                            *
@@ -140,12 +128,10 @@ static int validate_storageClass(void);
 /* Upload/download strings */
 static const char *const upload_download_names[] = { "download", "upload" };
 
-/* Valid StorageClass values */
-static const char *const cb_storageClasses[] = {
+/* Valid S3 StorageClass values */
+static const char *const s3_storageClasses[] = {
     SCLASS_STANDARD,                  /* For GS and S3 */
-    SCLASS_GS_NEARLINE,               /* For S3 */
-    SCLASS_GS_DRA,                    /* For GS */
-    SCLASS_S3_REDUCED_REDUNDANCY      /* for GS */
+    SCLASS_S3_REDUCED_REDUNDANCY      /* for S3 */
 };
 
 /* Valid S3 access values */
@@ -154,6 +140,19 @@ static const char *const s3_acls[] = {
     S3_ACCESS_PUBLIC_READ,
     S3_ACCESS_PUBLIC_READ_WRITE,
     S3_ACCESS_AUTHENTICATED_READ
+};
+
+/* Valid S3 authentication types */
+static const char *const s3_auth_types[] = {
+    AUTH_VERSION_AWS2,
+    AUTH_VERSION_AWS4
+};
+
+/* Valid GS StorageClass values */
+static const char *const gs_storageClasses[] = {
+    SCLASS_STANDARD,                  /* For GS and S3 */
+    SCLASS_GS_NEARLINE,               /* For GS */
+    SCLASS_GS_DRA                     /* For GS */
 };
 
 /* Valid GS access values */
@@ -167,16 +166,9 @@ static const char *const gs_acls[] = {
     GS_ACCESS_BUCKET_OWNER_FULL_CONTROL
 };
 
-/* Valid S3 authentication types */
-static const char *const s3_auth_types[] = {
-    AUTH_VERSION_AWS2,
-    AUTH_VERSION_AWS4,
-};
-
 /* Valid GS authentication types */
 static const char *const gs_auth_types[] = {
-    AUTH_VERSION_AWS2,
-    AUTH_VERSION_OAUTH2,
+    AUTH_VERSION_OAUTH2
 };
 
 /* Configuration structure */
@@ -962,38 +954,35 @@ validate_config(void)
     char blockSizeBuf[64];
     char fileSizeBuf[64];
     struct stat sb;
-    char urlbuf[512];
     char sClassBuf[64];
     int i;
     int r;
 
     /* Check bucket/testdir */
-    if (!config.test) {
-        if (config.http_io.bucket == NULL) {
-            warnx("no cloudbacker bucket specified");
-            return -1;
-        }
-        if (*config.http_io.bucket == '\0' || *config.http_io.bucket == '/' /* || strchr(config.http_io.bucket, '/') != 0 */) {
-            warnx("invalid cloudbacker bucket `%s'", config.http_io.bucket);
-            return -1;
-        }
-		
-        if( (strncmp(config.http_io.bucket, S3_BUCKET_PREFIX , BUCKET_PREFIX_LENGTH) ==0) && (strlen(config.http_io.bucket) > BUCKET_PREFIX_LENGTH) ) {
-            storage_type stype = S3_STORAGE;
-            config.http_io.storage_prefix = stype;
-        }
-        else if( (strncmp(config.http_io.bucket, GS_BUCKET_PREFIX , BUCKET_PREFIX_LENGTH) ==0) && (strlen(config.http_io.bucket) > BUCKET_PREFIX_LENGTH) ) {
-            storage_type stype = GS_STORAGE;
-            config.http_io.storage_prefix = stype;
-        }
-        else{
-            warnx("invalid bucket name `%s'", config.http_io.bucket);
-            return -1;
-        }
-        char justBucketName[64];    // remove bucket prefix
-        strncpy(justBucketName,config.http_io.bucket+BUCKET_PREFIX_LENGTH, strlen(config.http_io.bucket));
-        strcpy(config.http_io.bucket, justBucketName);          // use only bucket name for further processing
-    } else {
+    /* bucket name format gs://bucket for GS and s3://bucket for S3 respectively. */
+    if (config.http_io.bucket == NULL) {
+        warnx("no cloudbacker bucket specified");
+        return -1;
+    }
+    if (*config.http_io.bucket == '\0' || *config.http_io.bucket == '/') {
+        warnx("invalid cloudbacker bucket `%s'", config.http_io.bucket);
+        return -1;
+    }
+    if( (strncmp(config.http_io.bucket, S3_BUCKET_PREFIX , BUCKET_PREFIX_LENGTH) ==0) && (strlen(config.http_io.bucket) > BUCKET_PREFIX_LENGTH) ) {
+        config.http_io.storage_prefix = S3_STORAGE;
+    }
+    else if( (strncmp(config.http_io.bucket, GS_BUCKET_PREFIX , BUCKET_PREFIX_LENGTH) ==0) && (strlen(config.http_io.bucket) > BUCKET_PREFIX_LENGTH) ) {
+        config.http_io.storage_prefix = GS_STORAGE;
+    }
+    else{
+        warnx("invalid bucket name `%s'", config.http_io.bucket);
+        return -1;
+    }
+    char justBucketName[64];    // remove bucket prefix
+    strncpy(justBucketName,config.http_io.bucket+BUCKET_PREFIX_LENGTH, strlen(config.http_io.bucket));
+    strcpy(config.http_io.bucket, justBucketName);          // use only bucket name for further processing
+
+    if (config.test) {
         if (config.http_io.bucket == NULL) {
             warnx("no test directory specified");
             return -1;
@@ -1007,6 +996,24 @@ validate_config(void)
             warn("%s", config.http_io.bucket);
             return -1;
         }
+    }
+
+    /* Now we know storage type after parsing bucket name.
+     * Initialize storage specific validation function pointers here
+     */
+    if(config.http_io.storage_prefix == GS_STORAGE){
+        set_credentials = validate_gs_credentials;
+        validate_authVersion = validate_gs_authVersion;
+        validate_accessType = validate_gs_accessType;
+        validate_storageClass = validate_gs_storageClass;
+        set_urlbuf = set_gs_urlbuf;
+    }
+    else if(config.http_io.storage_prefix == S3_STORAGE){
+        set_credentials = validate_s3_credentials;
+        validate_authVersion = validate_s3_authVersion;
+        validate_accessType = validate_s3_accessType;
+        validate_storageClass = validate_s3_storageClass;
+        set_urlbuf = set_s3_urlbuf;
     }
    
     /* check user specified maxKeys value */
@@ -1029,20 +1036,8 @@ validate_config(void)
 
     /* Set default base URL */
     if (config.http_io.baseURL == NULL) {
-        if(config.http_io.storage_prefix == S3_STORAGE){
-            if (customRegion && strcmp(config.http_io.region, S3BACKER_DEFAULT_REGION) != 0)
-                snprintf(urlbuf, sizeof(urlbuf), "http%s://s3-%s.%s/", config.ssl ? "s" : "", config.http_io.region, S3_DOMAIN);
-            else
-                snprintf(urlbuf, sizeof(urlbuf), "http%s://s3.%s/", config.ssl ? "s" : "", S3_DOMAIN);
-        }
-        else if(config.http_io.storage_prefix == GS_STORAGE){
-	     snprintf(urlbuf, sizeof(urlbuf), "http%s://%s/", config.ssl ? "s" : "", GS_DOMAIN);
-        }
-
-        if ((config.http_io.baseURL = strdup(urlbuf)) == NULL) {
-            warn("malloc");
-            return -1;
-        }
+       if( set_urlbuf() != 0)
+          return -1;
     }
 
     /* Check base URL */
@@ -1319,8 +1314,8 @@ validate_config(void)
        
         r = (*cb->bucket_attributes)(cb, sClassBuf); 
         /* only for GS storage slass is bucket specific */
-        if( r == 0 && config.http_io.storage_prefix == GS_STORAGE )
-            warnx("specified bucket storage class is %s", config.http_io.storageClass);
+        if( r == 0 )
+            warnx("bucket storage class is %s", config.http_io.storageClass);
         if( r == 0) 
             r = (*cb->meta_data)(cb, &auto_file_size, &auto_block_size, &auto_name_hash);
        (*cb->destroy)(cb);
@@ -1582,7 +1577,6 @@ validate_config(void)
 static int 
 validate_credentials(void /*struct http_io_conf http_io*/)
 {
-    const int customBaseURL = config.http_io.baseURL != NULL;
 
     /* Default to $HOME/.cloudbacker for accessFile */
     if (config.http_io.ec2iam_role == NULL && config.accessFile == NULL) {
@@ -1617,13 +1611,6 @@ validate_credentials(void /*struct http_io_conf http_io*/)
     if (config.http_io.accessId != NULL && *config.http_io.accessId == '\0')
           config.http_io.accessId = NULL;
 
-    /* If no accessId, only read operations will succeed */
-    if (config.http_io.accessId == NULL && !config.fuse_ops.read_only && !customBaseURL){
-        if((config.http_io.ec2iam_role == NULL && config.http_io.storage_prefix == S3_STORAGE) || (config.http_io.storage_prefix == GS_STORAGE)) {   
-            warnx("warning: no `accessId' specified; only read operations will succeed");
-            warnx("you can eliminate this warning by providing the `--readOnly' flag");
-        }
-    }
 
     /* Find key in file if not specified explicitly */
     if (config.http_io.accessId == NULL && config.http_io.accessKey != NULL) {
@@ -1639,180 +1626,12 @@ validate_credentials(void /*struct http_io_conf http_io*/)
         }
     }
 
-    /* Check for conflict between explicit accessId and EC2 IAM role */
-    if (config.http_io.accessId != NULL && config.http_io.ec2iam_role != NULL && config.http_io.storage_prefix == S3_STORAGE) {
-          warnx("an `accessId' must not be specified when an `accessEC2IAM' role is specified");
-          return -1;
-    }
-
-    /* Check for conflict between explicit GS and EC2 IAM role */
-    if (config.http_io.accessId != NULL && config.http_io.ec2iam_role != NULL && config.http_io.storage_prefix == GS_STORAGE) {
-          warnx("An `accessEC2IAM' role is not compatible with GS. Ignoring `accessEC2IAM' flag. ");
-          config.http_io.ec2iam_role = NULL;
-    }
-
-    if(config.http_io.storage_prefix == GS_STORAGE){
-         config.http_io.auth.u.gs.clientId = strdup(config.http_io.accessId);
-         config.http_io.auth.u.gs.secret_keyfile = strdup(config.http_io.accessKey);
-         struct stat sb;
-         if (stat(config.http_io.auth.u.gs.secret_keyfile, &sb) == -1) {
-            warn("Invalid path to secret key file %s", config.http_io.auth.u.gs.secret_keyfile);
-            return -1;
-        }        
-    } 
-    else if(config.http_io.storage_prefix == S3_STORAGE){   
-         if(config.http_io.accessId != NULL && config.http_io.accessKey != NULL) {
-             config.http_io.auth.u.s3.accessId = strdup(config.http_io.accessId);
-             config.http_io.auth.u.s3.accessKey = strdup(config.http_io.accessKey);
-         }
-         if(config.http_io.ec2iam_role != NULL)
-             config.http_io.auth.u.s3.ec2iam_role = strdup(config.http_io.ec2iam_role);
-         else
-             config.http_io.auth.u.s3.ec2iam_role = NULL;
-   }
+   /* invokes storage specific function pointer */
+   if(set_credentials() != 0)
+       return -1;  
 
    return 0;
 }
-
-
-/*
- * For google storage valid authentication versions are oAuth2.0 and AWS2.
- * For amazon s3 storage valid authentication versions are AWS2 and AWS4.
- */ 
-
-static int validate_authVersion(void){
-
-    int i = 0;
-    char auth_buf[8]; 
-    if(config.http_io.storage_prefix == GS_STORAGE){
-          if(config.http_io.authVersion != NULL){
-	        for (i = 0; i < sizeof(gs_auth_types) / sizeof(*gs_auth_types); i++) {
-        	    if (strcasecmp(config.http_io.authVersion, gs_auth_types[i]) == 0)
-	            break;
-        	}
-		if (i == sizeof(gs_auth_types) / sizeof(*gs_auth_types)) {
-	            warnx("illegal authentication version `%s'", config.http_io.authVersion);
-        	    return -1;
-		}
-                    
-	        config.http_io.auth.u.gs.authVersion = strdup(config.http_io.authVersion);
-       	 }
-         else{
-        	strcpy(auth_buf, GSBACKER_DEFAULT_AUTH_VERSION);
-        	config.http_io.auth.u.gs.authVersion = strdup(auth_buf);
- 
-         }
-   }
-   else if(config.http_io.storage_prefix == S3_STORAGE){
-	 if(config.http_io.authVersion != NULL){
-        	for (i = 0; i < sizeof(s3_auth_types) / sizeof(*s3_auth_types); i++) {
-	            if (strcasecmp(config.http_io.authVersion, s3_auth_types[i]) == 0)
-	            break;
-        	}
-	        if (i == sizeof(s3_auth_types) / sizeof(*s3_auth_types)) {
-        	    warnx("illegal authentication version `%s'", config.http_io.authVersion);
-		    return -1;
-	        }
-                config.http_io.auth.u.s3.authVersion = strdup(config.http_io.authVersion);
-	}
-        else{
-	       strcpy(auth_buf,  S3BACKER_DEFAULT_AUTH_VERSION);
-	       config.http_io.auth.u.s3.authVersion = strdup(auth_buf);
-        } 
-   }  
-
-   return 0;
-}
-
-static int validate_accessType(void)
-{
-   int i = 0;
-   if(config.http_io.accessType != NULL){
-        if(config.http_io.storage_prefix == S3_STORAGE){
-          for (i = 0; i < sizeof(s3_acls) / sizeof(*s3_acls); i++) {
-               if (strcmp(config.http_io.accessType, s3_acls[i]) == 0)
-                  break;
-          }
-          if (i == sizeof(s3_acls) / sizeof(*s3_acls)) {
-             warnx("illegal access type `%s'", config.http_io.accessType);
-             return -1;
-          }          
-          config.http_io.auth.u.s3.accessType = strdup(config.http_io.accessType);
-       }
-       else if(config.http_io.storage_prefix == GS_STORAGE){
-          for (i = 0; i < sizeof(gs_acls) / sizeof(*gs_acls); i++) {
-             if (strcmp(config.http_io.accessType, gs_acls[i]) == 0)
-                break;
-          }
-          if (i == sizeof(gs_acls) / sizeof(*gs_acls)) {
-             warnx("illegal access type `%s'", config.http_io.accessType);
-             return -1;
-          }
-          config.http_io.auth.u.gs.accessType = strdup(config.http_io.accessType);
-      }
-   }
-   else{
-       if(config.http_io.storage_prefix == S3_STORAGE){           
-            config.http_io.auth.u.s3.accessType = S3BACKER_DEFAULT_ACCESS_TYPE;
-       }
-       else if(config.http_io.storage_prefix == GS_STORAGE) {          
-            config.http_io.auth.u.gs.accessType = GSBACKER_DEFAULT_ACCESS_TYPE;
-       }
-   }
-   return 0;
-}
-
-/*
- * validate storage class.
- * default storage class for GS is nearline
- * default storage class for S3 is standard
- * GS supports Standard Storage, Cloud Storage Nearline and Durable Reduced Availability (DRA) storage classes
- * S3 supports Standard storage and Reduced Redundancy storage (RRS) storage classes.
- * In GS, storage class is bucket specific. All objects in a bucket are of same storage class as of bucket.
- * In S3, storage class is object specific. 
- */
-static int validate_storageClass(void)
-{
-  
-   if(config.http_io.storageClass != NULL){  
-        int i = 0;
-        for (i = 0; i < sizeof(cb_storageClasses) / sizeof(*cb_storageClasses); i++) {
-             if (strcasecmp(config.http_io.storageClass, cb_storageClasses[i]) == 0)
-                break;
-        }
-        if (i == sizeof(cb_storageClasses) / sizeof(*cb_storageClasses)) {
-	    warnx("illegal storageClass type `%s'", config.http_io.storageClass);
-	    return -1;
-        }
-        
-        if(config.http_io.storage_prefix == GS_STORAGE) {
-            if( (strcasecmp(config.http_io.storageClass, SCLASS_STANDARD)!= 0) && 
-                (strcasecmp(config.http_io.storageClass, SCLASS_GS_NEARLINE)!= 0 ) &&
-                (strcasecmp(config.http_io.storageClass, SCLASS_GS_DRA)!= 0) ){
-                warnx("illegal storageClass type '%s' for google storage bucket",config.http_io.storageClass);
-                return -1;
-            } 
-        }
-        else  if(config.http_io.storage_prefix == S3_STORAGE) {
-            if( (strcasecmp(config.http_io.storageClass, SCLASS_STANDARD)!= 0) &&
-                (strcasecmp(config.http_io.storageClass, SCLASS_S3_REDUCED_REDUNDANCY)!= 0) ){
-                warnx("illegal storageClass type '%s' for s3 storage bucket",config.http_io.storageClass);
-	        return -1;	
-	    }
-        }		
-    }
-    else {
-         if(config.http_io.storage_prefix == GS_STORAGE){
-             config.http_io.storageClass = SCLASS_GS_NEARLINE;
-         }
-         else if(config.http_io.storage_prefix == S3_STORAGE) {
-             config.http_io.storageClass = SCLASS_STANDARD;
-         }
-    }
-
-    return 0;  
-}
-
 
 static void
 list_blocks_callback(void *arg, cb_block_t block_num)
@@ -2026,13 +1845,18 @@ usage(void)
     fprintf(stderr, "\t--%-27s %s\n", "quiet", "Omit progress output at startup");
     fprintf(stderr, "\t--%-27s %s\n", "readAhead=NUM", "Number of blocks to read-ahead");
     fprintf(stderr, "\t--%-27s %s\n", "readAheadTrigger=NUM", "# of sequentially read blocks to trigger read-ahead");    
+    fprintf(stderr, "\t--%-27s %s\n", "nameHash", "Enables name hashing for objects");
     fprintf(stderr, "\t--%-27s %s\n", "readOnly", "Return `Read-only file system' error for write attempts");
     fprintf(stderr, "\t--%-27s %s\n", "region=region", "Specify AWS region");
     fprintf(stderr, "\t--%-27s %s\n", "reset-mounted-flag", "Reset `already mounted' flag in the filesystem");
-    fprintf(stderr, "\t--%-27s %s\n", "storageClass=iclass", "GS or S3 storage class used when mounting file system; one of:");
-    fprintf(stderr, "\t  %-27s ", "");
-    for (i = 0; i < sizeof(cb_storageClasses) / sizeof(*cb_storageClasses); i++)
-        fprintf(stderr, "%s%s", i > 0 ? ", " : "  ", cb_storageClasses[i]);
+    fprintf(stderr, "\t--%-27s %s\n", "storageClass=class", "GS or S3 storage class used when mounting file system; one of:");
+    fprintf(stderr, "\t  %-27s ", "For GS ");
+    for (i = 0; i < sizeof(gs_storageClasses) / sizeof(*gs_storageClasses); i++)
+        fprintf(stderr, "%s%s", i > 0 ? ", " : "  ", gs_storageClasses[i]);
+    fprintf(stderr, "\n");
+    fprintf(stderr, "\t  %-27s ", "For S3 ");
+    for (i = 0; i < sizeof(s3_storageClasses) / sizeof(*s3_storageClasses); i++)
+        fprintf(stderr, "%s%s", i > 0 ? ", " : "  ", s3_storageClasses[i]);
     fprintf(stderr, "\n");
     fprintf(stderr, "\t--%-27s %s\n", "size=SIZE", "File size (with optional suffix 'K', 'M', 'G', etc.)");
     fprintf(stderr, "\t--%-27s %s\n", "ssl", "Enable SSL");
@@ -2047,7 +1871,7 @@ usage(void)
     fprintf(stderr, "\t--%-27s %s\n", "accessId", "The first one listed in `accessFile'");
     fprintf(stderr, "\t--%-27s %s\"%s\"%s\"%s\"\n", "accessType","For GS ", GSBACKER_DEFAULT_ACCESS_TYPE, ", For S3 ",S3BACKER_DEFAULT_ACCESS_TYPE );
     fprintf(stderr, "\t--%-27s %s\"%s\"%s\"%s\"\n", "authVersion (For GS)","For GS ", GSBACKER_DEFAULT_AUTH_VERSION, ", For S3 ",S3BACKER_DEFAULT_AUTH_VERSION);
-    fprintf(stderr, "\t--%-27s %s\"%s\"%s\"%s\"\n", "baseURL","For GS ", "http://s3." S3_DOMAIN "/", ", For S3 ","http://" GS_DOMAIN "/");
+    fprintf(stderr, "\t--%-27s %s\"%s\"%s\"%s\"\n", "baseURL","For GS ", "http://" GS_DOMAIN "/" , ", For S3 ","http://s3." S3_DOMAIN "/");
     fprintf(stderr, "\t--%-27s %u\n", "blockCacheSize", CLOUDBACKER_DEFAULT_BLOCK_CACHE_SIZE);
     fprintf(stderr, "\t--%-27s %u\n", "blockCacheThreads", CLOUDBACKER_DEFAULT_BLOCK_CACHE_NUM_THREADS);
     fprintf(stderr, "\t--%-27s %u\n", "blockCacheTimeout", CLOUDBACKER_DEFAULT_BLOCK_CACHE_TIMEOUT);
@@ -2079,3 +1903,249 @@ usage(void)
     fprintf(stderr, "\t%-29s %s\n", "-s", "Run in single-threaded mode");
 }
 
+/* GS specific validation functions invoked through function pointers for parsing command line arguments */	 
+/*
+ * cloudbacker accessFile format
+ *
+ * For GCS: accessFile format
+ * <clientId>:<path to p12 key file> OR
+ * <clientId>:<path to json key file>
+ */
+int
+validate_gs_credentials(void)
+{
+    const int customBaseURL = config.http_io.baseURL != NULL;
+
+    /* If no accessId, only read operations will succeed */
+    if (config.http_io.accessId == NULL && !config.fuse_ops.read_only && !customBaseURL){
+        warnx("warning: no `accessId' specified; only read operations will succeed");
+        warnx("you can eliminate this warning by providing the `--readOnly' flag");
+    }
+    
+    /* Check for conflict between explicit GS and EC2 IAM role */
+    if (config.http_io.accessId != NULL && config.http_io.ec2iam_role != NULL) {
+          warnx("An `accessEC2IAM' role is not compatible with GS. Ignoring `accessEC2IAM' flag. ");
+          config.http_io.ec2iam_role = NULL;
+    }
+
+
+    config.http_io.auth.u.gs.clientId = strdup(config.http_io.accessId);
+    config.http_io.auth.u.gs.secret_keyfile = strdup(config.http_io.accessKey);
+    struct stat sb;
+    if (stat(config.http_io.auth.u.gs.secret_keyfile, &sb) == -1) {
+        warn("Invalid path to secret key file %s", config.http_io.auth.u.gs.secret_keyfile);
+        return -1;
+    }
+
+    return 0;
+}
+
+/* For google storage valid authentication versions are oAuth2.0 and AWS2. */
+int validate_gs_authVersion(void)
+{
+    int i = 0;
+    char auth_buf[8];
+    if(config.http_io.authVersion != NULL){
+        for (i = 0; i < sizeof(gs_auth_types) / sizeof(*gs_auth_types); i++) {
+            if (strcasecmp(config.http_io.authVersion, gs_auth_types[i]) == 0)
+                break;
+        }
+        if (i == sizeof(gs_auth_types) / sizeof(*gs_auth_types)) {
+            warnx("illegal authentication version `%s'", config.http_io.authVersion);
+            return -1;
+        }
+        config.http_io.auth.u.gs.authVersion = strdup(config.http_io.authVersion);
+    }
+    else{
+        strcpy(auth_buf, GSBACKER_DEFAULT_AUTH_VERSION);
+        config.http_io.auth.u.gs.authVersion = strdup(auth_buf);
+    }
+    return 0;
+}
+
+int validate_gs_accessType(void)
+{
+    int i = 0;
+    if(config.http_io.accessType != NULL){
+        for (i = 0; i < sizeof(gs_acls) / sizeof(*gs_acls); i++) {
+            if (strcmp(config.http_io.accessType, gs_acls[i]) == 0)
+                break;
+        }
+        if (i == sizeof(gs_acls) / sizeof(*gs_acls)) {
+            warnx("illegal access type `%s'", config.http_io.accessType);
+            return -1;
+        }
+        config.http_io.auth.u.gs.accessType = strdup(config.http_io.accessType);
+    }
+    else{
+        config.http_io.auth.u.gs.accessType = GSBACKER_DEFAULT_ACCESS_TYPE;
+    }
+    return 0;
+}
+/*
+ * validate storage class.
+ * default storage class for GS is nearline
+ * GS supports Standard Storage, Cloud Storage Nearline and Durable Reduced Availability (DRA) storage classes
+ * In GS, storage class is bucket specific. All objects in a bucket are of same storage class as of bucket.
+ */
+int validate_gs_storageClass(void)
+{
+    if(config.http_io.storageClass != NULL){
+        int i = 0;
+        for (i = 0; i < sizeof(gs_storageClasses) / sizeof(*gs_storageClasses); i++) {
+            if (strcasecmp(config.http_io.storageClass, gs_storageClasses[i]) == 0)
+                break;
+        }
+        if (i == sizeof(gs_storageClasses) / sizeof(*gs_storageClasses)) {
+            warnx("illegal storageClass type `%s' for google storage bucket", config.http_io.storageClass);
+            return -1;
+        }
+    }
+    else {
+        config.http_io.storageClass = SCLASS_GS_NEARLINE;
+    }
+
+    return 0;
+}
+
+/* sets url buf */
+int set_gs_urlbuf(void)
+{
+    char urlbuf[512];
+    snprintf(urlbuf, sizeof(urlbuf), "http%s://%s/", config.ssl ? "s" : "", GS_DOMAIN);
+    if ((config.http_io.baseURL = strdup(urlbuf)) == NULL) {
+        warn("malloc");
+        return -1;
+    }
+    return 0;
+}
+
+/* S3 specific validation functions invoked through function pointers for parsing command line arguments */	 
+/*
+ * Function to read credentials from accessFile or command line arguments accessId and accesskey
+ *
+ * cloudbacker accessFile format
+ *
+ * For s3: accessFile format
+ * <accessId>:<secret oraccesskey>
+ */
+int
+validate_s3_credentials(void)
+{
+    const int customBaseURL = config.http_io.baseURL != NULL;
+    
+    /* If no accessId, only read operations will succeed */
+    if (config.http_io.accessId == NULL && !config.fuse_ops.read_only && !customBaseURL){
+        if(config.http_io.ec2iam_role == NULL ) {
+            warnx("warning: no `accessId' specified; only read operations will succeed");
+            warnx("you can eliminate this warning by providing the `--readOnly' flag");
+        }
+    }
+
+    /* Check for conflict between explicit accessId and EC2 IAM role */
+    if (config.http_io.accessId != NULL && config.http_io.ec2iam_role != NULL) {
+        warnx("an `accessId' must not be specified when an `accessEC2IAM' role is specified");
+        return -1;
+    }
+
+    if(config.http_io.accessId != NULL && config.http_io.accessKey != NULL) {
+        config.http_io.auth.u.s3.accessId = strdup(config.http_io.accessId);
+        config.http_io.auth.u.s3.accessKey = strdup(config.http_io.accessKey);
+    }
+    if(config.http_io.ec2iam_role != NULL)
+        config.http_io.auth.u.s3.ec2iam_role = strdup(config.http_io.ec2iam_role);
+    else
+        config.http_io.auth.u.s3.ec2iam_role = NULL;
+
+    return 0;
+}
+
+/*
+ * For google storage valid authentication versions are oAuth2.0 and AWS2.
+ * For amazon s3 storage valid authentication versions are AWS2 and AWS4.
+ */
+
+int validate_s3_authVersion(void)
+{
+    int i = 0;
+    char auth_buf[8];
+    if(config.http_io.authVersion != NULL){
+        for (i = 0; i < sizeof(s3_auth_types) / sizeof(*s3_auth_types); i++) {
+            if (strcasecmp(config.http_io.authVersion, s3_auth_types[i]) == 0)
+                break;
+        }
+        if (i == sizeof(s3_auth_types) / sizeof(*s3_auth_types)) {
+            warnx("illegal authentication version `%s'", config.http_io.authVersion);
+            return -1;
+        }
+        config.http_io.auth.u.s3.authVersion = strdup(config.http_io.authVersion);
+    }
+    else{
+        strcpy(auth_buf, S3BACKER_DEFAULT_AUTH_VERSION);
+        config.http_io.auth.u.s3.authVersion = strdup(auth_buf);
+    }
+    return 0;
+}
+
+int validate_s3_accessType(void)
+{
+    int i = 0;
+    if(config.http_io.accessType != NULL){
+        for (i = 0; i < sizeof(s3_acls) / sizeof(*s3_acls); i++) {
+            if (strcmp(config.http_io.accessType, s3_acls[i]) == 0)
+                break;
+        }
+        if (i == sizeof(s3_acls) / sizeof(*s3_acls)) {
+            warnx("illegal access type `%s'", config.http_io.accessType);
+            return -1;
+        }
+        config.http_io.auth.u.s3.accessType = strdup(config.http_io.accessType);
+    }
+    else{
+        config.http_io.auth.u.s3.accessType = S3BACKER_DEFAULT_ACCESS_TYPE;
+    }
+    return 0;
+}
+
+/*
+ * validate storage class.
+ * default storage class for S3 is standard
+ * S3 supports Standard storage and Reduced Redundancy storage (RRS) storage classes.
+ * In S3, storage class is object specific.
+ */
+int validate_s3_storageClass(void)
+{
+    if(config.http_io.storageClass != NULL){
+        int i = 0;
+        for (i = 0; i < sizeof(s3_storageClasses) / sizeof(*s3_storageClasses); i++) {
+            if (strcasecmp(config.http_io.storageClass, s3_storageClasses[i]) == 0)
+                break;
+        }
+        if (i == sizeof(s3_storageClasses) / sizeof(*s3_storageClasses)) {
+            warnx("illegal storageClass type `%s' for s3 storage bucket", config.http_io.storageClass);
+            return -1;
+        }
+    }
+    else {
+        config.http_io.storageClass = SCLASS_STANDARD;
+    }
+
+    return 0;
+}
+
+/* set url buf based on region */
+int set_s3_urlbuf(void)
+{
+    const int customRegion = config.http_io.region != NULL;
+    char urlbuf[512];
+    if (customRegion && strcmp(config.http_io.region, S3BACKER_DEFAULT_REGION) != 0)
+        snprintf(urlbuf, sizeof(urlbuf), "http%s://s3-%s.%s/", config.ssl ? "s" : "", config.http_io.region, S3_DOMAIN);
+    else
+        snprintf(urlbuf, sizeof(urlbuf), "http%s://s3.%s/", config.ssl ? "s" : "", S3_DOMAIN);
+
+    if ((config.http_io.baseURL = strdup(urlbuf)) == NULL) {
+        warn("malloc");
+        return -1;
+    }
+    return 0;
+}

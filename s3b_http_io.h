@@ -32,6 +32,17 @@
 #define AUTH_VERSION_AWS2              "aws2"
 #define AUTH_VERSION_AWS4              "aws4"
 
+/* S3 access permission strings */
+#define S3_ACCESS_PRIVATE                           "private"
+#define S3_ACCESS_PUBLIC_READ                       "public-read"
+#define S3_ACCESS_PUBLIC_READ_WRITE                 "public-read-write"
+#define S3_ACCESS_AUTHENTICATED_READ                "authenticated-read"
+
+/* s3 - Default values for some configuration parameters */
+#define S3BACKER_DEFAULT_ACCESS_TYPE                S3_ACCESS_PRIVATE
+#define S3BACKER_DEFAULT_AUTH_VERSION               AUTH_VERSION_AWS4
+#define S3BACKER_DEFAULT_REGION                     "us-east-1"
+
 /* S3-specific HTTP definitions */
 #define S3B_FILE_SIZE_HEADER            "x-amz-meta-s3backer-filesize"
 #define S3B_BLOCK_SIZE_HEADER           "x-amz-meta-s3backer-blocksize"
