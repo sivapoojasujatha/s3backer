@@ -960,29 +960,31 @@ validate_config(void)
 
     /* Check bucket/testdir */
     /* bucket name format gs://bucket for GS and s3://bucket for S3 respectively. */
-    if (config.http_io.bucket == NULL) {
-        warnx("no cloudbacker bucket specified");
-        return -1;
+    /* test dir format is path/to/directory */
+    if(!config.test) {
+        if (config.http_io.bucket == NULL) {
+            warnx("no cloudbacker bucket specified");
+            return -1;
+        }
+        if (*config.http_io.bucket == '\0' || *config.http_io.bucket == '/') {
+            warnx("invalid cloudbacker bucket `%s'", config.http_io.bucket);
+            return -1;
+        }
+        if( (strncmp(config.http_io.bucket, S3_BUCKET_PREFIX , BUCKET_PREFIX_LENGTH) ==0) && (strlen(config.http_io.bucket) > BUCKET_PREFIX_LENGTH) ) {
+            config.http_io.storage_prefix = S3_STORAGE;
+        }
+        else if( (strncmp(config.http_io.bucket, GS_BUCKET_PREFIX , BUCKET_PREFIX_LENGTH) ==0) && (strlen(config.http_io.bucket) > BUCKET_PREFIX_LENGTH) ) {
+            config.http_io.storage_prefix = GS_STORAGE;
+        }
+        else{
+            warnx("invalid bucket name `%s'", config.http_io.bucket);
+            return -1;
+        }
+        char justBucketName[64];    // remove bucket prefix
+        strncpy(justBucketName,config.http_io.bucket+BUCKET_PREFIX_LENGTH, strlen(config.http_io.bucket));
+        strcpy(config.http_io.bucket, justBucketName);          // use only bucket name for further processing
     }
-    if (*config.http_io.bucket == '\0' || *config.http_io.bucket == '/') {
-        warnx("invalid cloudbacker bucket `%s'", config.http_io.bucket);
-        return -1;
-    }
-    if( (strncmp(config.http_io.bucket, S3_BUCKET_PREFIX , BUCKET_PREFIX_LENGTH) ==0) && (strlen(config.http_io.bucket) > BUCKET_PREFIX_LENGTH) ) {
-        config.http_io.storage_prefix = S3_STORAGE;
-    }
-    else if( (strncmp(config.http_io.bucket, GS_BUCKET_PREFIX , BUCKET_PREFIX_LENGTH) ==0) && (strlen(config.http_io.bucket) > BUCKET_PREFIX_LENGTH) ) {
-        config.http_io.storage_prefix = GS_STORAGE;
-    }
-    else{
-        warnx("invalid bucket name `%s'", config.http_io.bucket);
-        return -1;
-    }
-    char justBucketName[64];    // remove bucket prefix
-    strncpy(justBucketName,config.http_io.bucket+BUCKET_PREFIX_LENGTH, strlen(config.http_io.bucket));
-    strcpy(config.http_io.bucket, justBucketName);          // use only bucket name for further processing
-
-    if (config.test) {
+    else {
         if (config.http_io.bucket == NULL) {
             warnx("no test directory specified");
             return -1;
@@ -1023,9 +1025,12 @@ validate_config(void)
     } 
 
     /* Read credentials from accessFile or through command line arguments accessId and accesskey */
-    if( validate_credentials() != 0){
-       warnx("Invalid credentials");
-       return -1;
+    /* Validation is not required if run with test flag */
+    if(!config.test){
+        if( validate_credentials() != 0){
+            warnx("Invalid credentials");
+            return -1;
+        }
     }
 
     /* Set default or custom region */
@@ -1928,19 +1933,23 @@ validate_gs_credentials(void)
           config.http_io.ec2iam_role = NULL;
     }
 
-
-    config.http_io.auth.u.gs.clientId = strdup(config.http_io.accessId);
-    config.http_io.auth.u.gs.secret_keyfile = strdup(config.http_io.accessKey);
-    struct stat sb;
-    if (stat(config.http_io.auth.u.gs.secret_keyfile, &sb) == -1) {
-        warn("Invalid path to secret key file %s", config.http_io.auth.u.gs.secret_keyfile);
-        return -1;
+    if(config.http_io.accessId != NULL)
+        config.http_io.auth.u.gs.clientId = strdup(config.http_io.accessId);
+    
+    if(config.http_io.accessKey != NULL) {
+        config.http_io.auth.u.gs.secret_keyfile = strdup(config.http_io.accessKey);
+    
+        struct stat sb;
+        if (stat(config.http_io.auth.u.gs.secret_keyfile, &sb) == -1) {
+            warn("Invalid path to secret key file %s", config.http_io.auth.u.gs.secret_keyfile);
+            return -1;
+        }
     }
 
     return 0;
 }
 
-/* For google storage valid authentication versions are oAuth2.0 and AWS2. */
+/* For google storage valid authentication versions are oAuth2.0 and AWS2(supports in backward compatibility mode). */
 int validate_gs_authVersion(void)
 {
     int i = 0;

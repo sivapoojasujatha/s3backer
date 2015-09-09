@@ -136,12 +136,10 @@ http_io_create(struct http_io_conf *config)
        cb->bucket_attributes = http_io_s3b_bucket_attributes;     
 
        /* Which auth version? */
-       if (config->auth.u.s3.accessId != NULL){
-           if (strcasecmp(config->auth.u.s3.authVersion, AUTH_VERSION_AWS2) == 0)
-               config->authenticate = http_io_add_auth2;
-           else if (strcasecmp(config->auth.u.s3.authVersion, AUTH_VERSION_AWS4) == 0)
-               config->authenticate = http_io_add_auth4;        
-       }
+       if (strcasecmp(config->auth.u.s3.authVersion, AUTH_VERSION_AWS2) == 0)
+           config->authenticate = http_io_add_auth2;
+       else if (strcasecmp(config->auth.u.s3.authVersion, AUTH_VERSION_AWS4) == 0)
+           config->authenticate = http_io_add_auth4;        
        
        /* update EC2 IAM role authentication threads */
        config->update_auth_threads = update_iam_credentials;
@@ -1324,7 +1322,8 @@ int
 http_io_add_auth(struct http_io_private *priv, struct http_io *const io, time_t now, const void *payload, size_t plen)
 {
     const struct http_io_conf *const config = priv->config;
-    return (config->authenticate)(priv, io, now, payload, plen);
+    
+    return (*config->authenticate)(priv, io, now, payload, plen);
 }
 
 /*
