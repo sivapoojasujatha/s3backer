@@ -261,6 +261,7 @@ struct http_io_conf {
     const char          *password;
     const char          *encryption;
     const char          *storageClass;
+    cb_block_t          last_block;                 // last dirty block listed
     u_int               maxKeys;
     u_int               key_length;
     u_int		name_hash;

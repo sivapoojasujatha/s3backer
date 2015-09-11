@@ -25,6 +25,7 @@
 #include "http_gio.h"
 #include "gsb_http_io.h"
 #include "s3b_http_io.h"
+//#include <stdlib.h>
 
 /* cloudbacker_store functions */
 static int http_io_meta_data(struct cloudbacker_store *cb, off_t *file_sizep, u_int *block_sizep, u_int *name_hashp);
@@ -404,6 +405,9 @@ http_io_list_blocks(struct cloudbacker_store *cb, block_list_func_t *callback, v
         goto oom;
     }
 
+    int listcount = 0;
+    if(config->maxKeys > LIST_BLOCKS_CHUNK)  // http request lists max 1000 blocks at a time
+        config->maxKeys = LIST_BLOCKS_CHUNK;
     /* List blocks */
     do {
         const time_t now = time(NULL);
@@ -422,13 +426,28 @@ http_io_list_blocks(struct cloudbacker_store *cb, block_list_func_t *callback, v
          * Careful to remember about block number bit reversal when recording the marker.
          */
         if (io.list_truncated) {
-            snprintf(urlbuf + strlen(urlbuf), sizeof(urlbuf) - strlen(urlbuf), "%s=%s%0*jx&",
+       
+        /*    snprintf(urlbuf + strlen(urlbuf), sizeof(urlbuf) - strlen(urlbuf), "%s=%s%0*jx&",
                      LIST_PARAM_MARKER, config->prefix, CB_BLOCK_NUM_DIGITS,
                      config->name_hash ? (uintmax_t)bit_reverse(io.last_block) : (uintmax_t)io.last_block);
+        */
+        /* If we use io.last_block, there is a chance that it does not get updated correctly and may end up in infinite loop
+         * as io.list_truncated will always be true.
+         * config->last_block value is updated in http_io_parse_block() from the xml.
+         * Listing of blocks is done based on prefix value, if blocks with the specified prefix are present with same block_size
+         * then, those blocks are listed. If blocks are existing without any prefix value, then, if we dont specify prefix flag,
+         * then the blocks are listed.
+         * marker parameter value should be correct to get list of blocks, else, we may end up in reading wring data.
+         */
+               snprintf(urlbuf + strlen(urlbuf), sizeof(urlbuf) - strlen(urlbuf), "%s=%s%0*jx&",
+                     LIST_PARAM_MARKER, config->prefix, CB_BLOCK_NUM_DIGITS,
+                     config->name_hash ? (uintmax_t)bit_reverse(config->last_block) : (uintmax_t)config->last_block);
+             
         }
+       
         snprintf(urlbuf + strlen(urlbuf), sizeof(urlbuf) - strlen(urlbuf), "%s=%u", LIST_PARAM_MAX_KEYS, config->maxKeys);
         snprintf(urlbuf + strlen(urlbuf), sizeof(urlbuf) - strlen(urlbuf), "&%s=%s", LIST_PARAM_PREFIX, config->prefix);
-        
+       
         /* Add Date header */
         http_io_add_date(priv, &io, now);
 
@@ -461,6 +480,10 @@ http_io_list_blocks(struct cloudbacker_store *cb, block_list_func_t *callback, v
             r = EIO;
             goto fail;
         }
+        /* break in case of infinite loop */
+        listcount+= config->maxKeys;
+        if(listcount >= config->num_blocks)
+            break; 
     } while (io.list_truncated);
 
     /* Done */
@@ -586,8 +609,9 @@ http_io_parse_block(struct http_io_conf *config, const char *name, cb_block_t *b
     int i;
 
     /* Check prefix */
-    if (strncmp(name, config->prefix, plen) != 0)
+    if ( (strlen(config->prefix) > 0) && (strncmp(name, config->prefix, plen) != 0) ) 
         return -1;
+
     name += plen;
 
     /* Parse block number */
@@ -601,13 +625,14 @@ http_io_parse_block(struct http_io_conf *config, const char *name, cb_block_t *b
     }
 
     if (config->name_hash)
-      block_num = bit_reverse(block_num);
+        block_num = bit_reverse(block_num);
 
     /* Was parse successful? */
     if (i != CB_BLOCK_NUM_DIGITS || name[i] != '\0' || block_num >= config->num_blocks)
         return -1;
 
     /* Done */
+    config->last_block = block_num;
     *block_nump = block_num;
     return 0;
 }
