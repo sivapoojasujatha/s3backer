@@ -60,6 +60,69 @@ header_parser_t cb_header_parser[] = {
 
 
 /*
+ * Async block list support
+ */
+struct http_list_blocks_arg {
+    struct cloudbacker_store    *cb;
+    struct http_io_private	*priv;
+};
+
+void
+http_list_blocks_callback(void *arg, cb_block_t block_num)
+{
+    struct http_list_blocks *const lb = arg;
+    const int bits_per_word = sizeof(*lb->bitmap) * 8;
+    int print_dot = 0;
+
+    if (lb->async)
+        pthread_mutex_lock(lb->mutex);
+    lb->bitmap[block_num / bits_per_word] |= 1 << (block_num % bits_per_word);
+    lb->count++;
+    if (lb->print_dots && (lb->count % BLOCKS_PER_DOT) == 0)
+	print_dot = 1;
+    if (lb->async)
+        pthread_mutex_unlock(lb->mutex);
+    if (print_dot) {
+        fprintf(stderr, ".");
+        fflush(stderr);
+    }
+}
+
+static void *
+http_list_blocks_main(void *param)
+{
+    struct http_list_blocks_arg *arg = param;
+    struct http_io_private 	*const priv = arg->priv;
+    int r = 0;
+    struct http_list_blocks lb;
+
+    lb.bitmap = priv->non_zero;
+    lb.print_dots = 0;
+    lb.count = 0;
+    lb.mutex = &priv->mutex;
+    lb.async = 1;
+
+    (*priv->config->log)(LOG_INFO, "http_list_blocks_main(): started asynchronous listing of blocks");
+
+    if ((r = (arg->cb->list_blocks)(arg->cb, http_list_blocks_callback, &lb)) != 0) {
+        free(param);
+        err(1, "can't list blocks: %s", strerror(r));
+    }
+
+    pthread_mutex_lock(&priv->mutex);
+    priv->non_zero_complete = HTTP_IO_BITMAP_DONE;
+    pthread_mutex_unlock(&priv->mutex);
+
+    (*priv->config->log)(LOG_INFO, "http_list_blocks_main(): finished asynchronous listing of blocks");
+    (*priv->config->log)(LOG_INFO, "http_list_blocks_main(): %ju non-zero blocks found", lb.count);
+
+    free(param);
+
+    return NULL;
+}
+
+
+/*
  * Constructor
  *
  * On error, returns NULL and sets `errno'.
@@ -239,7 +302,24 @@ http_io_create(struct http_io_conf *config)
     
     /* Take ownership of non-zero block bitmap */
     priv->non_zero = config->nonzero_bitmap;
+    priv->non_zero_complete = config->nonzero_bitmap_complete;
     config->nonzero_bitmap = NULL;
+
+    priv->block_list_thread = (pthread_t)0;
+    if (priv->non_zero_complete == HTTP_IO_BITMAP_ASYNC) {
+        struct http_list_blocks_arg *param =
+            malloc(sizeof(struct http_list_blocks_arg));
+        if (param == NULL) {
+            r = ENOMEM;
+            goto fail5;
+        }
+        param->priv = priv;
+        param->cb = cb;
+
+        /* Start asyncronous block listing to populate the non-zero bitmap */
+        if ((r = pthread_create(&priv->block_list_thread, NULL, http_list_blocks_main, param)) != 0)
+            errx(1, "can't create thread to list blocks: %s", strerror(r));
+    }
 
     /* Done */
     return cb;
@@ -280,10 +360,23 @@ http_io_destroy(struct cloudbacker_store *const cb)
     struct http_io_private *const priv = cb->data;
     struct http_io_conf *const config = priv->config;
     struct curl_holder *holder;
+    int r = 0;
 
     /* Shut down authenication thread */
     priv->shutting_down = 1;
     (*config->destroy_auth_threads)(priv);
+
+    /* Shut down asynchronous block listing thread if any */
+    if (priv->non_zero_complete != HTTP_IO_BITMAP_NONE &&
+	priv->block_list_thread) {
+	(*config->log)(LOG_DEBUG, "waiting for async list blocks thread to shutdown");
+	if ((r = pthread_cancel(priv->block_list_thread)) != 0)
+	    (*config->log)(LOG_WARNING, "pthread_cancel: %s", strerror(r));
+	if ((r = pthread_join(priv->block_list_thread, NULL)) != 0)
+	    (*config->log)(LOG_ERR, "pthread_join: %s", strerror(r));
+	else
+	    (*config->log)(LOG_DEBUG, "Async block listing thread successfully shutdown");
+    }
 
     /* Clean up openssl */
     while (num_openssl_locks > 0)
@@ -411,6 +504,12 @@ http_io_list_blocks(struct cloudbacker_store *cb, block_list_func_t *callback, v
     /* List blocks */
     do {
         const time_t now = time(NULL);
+
+	/* Stop listing object if shutting down */
+	if (priv->shutting_down) {
+	    r = EAGAIN;
+	    goto fail;
+	}
 
         /* Reset XML parser state */
         XML_ParserReset(io.xml, NULL);
@@ -541,12 +640,12 @@ void name_hash_parser(char *buf, struct http_io *io)
         for (token = strtok(buf, delim); token; token = strtok(NULL, delim)){
             if (!strstr(token, io->config->http_io_params->name_hash_header)){
                 char pbuf[8];
-		if (sscanf(token,  "%s", pbuf)) {
-		    if (strncmp(pbuf, "yes", sizeof("yes")) == 0)
-		        io->name_hash = 1;
-	             else
-			io->name_hash = 0;
-		}  
+                if (sscanf(token,  "%s", pbuf)) {
+                    if (strncmp(pbuf, "yes", sizeof("yes")) == 0)
+                        io->name_hash = 1;
+                     else
+                        io->name_hash = 0;
+                }
             }
         }
     }
@@ -768,7 +867,7 @@ http_io_set_mounted(struct cloudbacker_store *cb, int *old_valuep, int new_value
         if (strcasecmp(config->storageClass, SCLASS_S3_REDUCED_REDUNDANCY)==0){
             io.headers = http_io_add_header(io.headers, "%s: %s", priv->config->http_io_params->storage_class_header, 
                                                                   priv->config->http_io_params->storage_class_headerval);
-	}
+        }
 
         /* Add Authorization header */
         if ((r = http_io_add_auth(priv, &io, now, io.src, io.buf_size)) != 0)
@@ -848,7 +947,7 @@ http_io_read_block(struct cloudbacker_store *const cb, cb_block_t block_num, voi
         const int bit = 1 << (block_num % bits_per_word);
 
         pthread_mutex_lock(&priv->mutex);
-        if ((priv->non_zero[word] & bit) == 0) {
+        if ((priv->non_zero[word] & bit) == 0 && priv->non_zero_complete == HTTP_IO_BITMAP_DONE) {
             priv->stats.empty_blocks_read++;
             pthread_mutex_unlock(&priv->mutex);
             memset(dest, 0, config->block_size);
@@ -1145,7 +1244,7 @@ http_io_write_block(struct cloudbacker_store *const cb, cb_block_t block_num, co
 
         pthread_mutex_lock(&priv->mutex);
         if (src == NULL) {
-            if ((priv->non_zero[word] & bit) == 0) {
+            if ((priv->non_zero[word] & bit) == 0 && priv->non_zero_complete == HTTP_IO_BITMAP_DONE) {
                 priv->stats.empty_blocks_written++;
                 pthread_mutex_unlock(&priv->mutex);
                 return 0;
@@ -1291,7 +1390,7 @@ http_io_write_block(struct cloudbacker_store *const cb, cb_block_t block_num, co
 
     /* Add storage class header (if needed) */
     if (strcasecmp(config->storageClass, SCLASS_S3_REDUCED_REDUNDANCY)==0){
-	 io.headers = http_io_add_header(io.headers, "%s: %s", priv->config->http_io_params->storage_class_header, priv->config->http_io_params->storage_class_headerval);
+         io.headers = http_io_add_header(io.headers, "%s: %s", priv->config->http_io_params->storage_class_header, priv->config->http_io_params->storage_class_headerval);
     }
 
     /* Add Authorization header */
@@ -1929,7 +2028,7 @@ http_io_curl_header(void *ptr, size_t size, size_t nmemb, void *stream)
 
     /* run the list of parsers as described in the io structure */
     for (i = 0; NULL != io->header_parser[i]; i++) {
-	(*io->header_parser[i])(buf, io);
+        (*io->header_parser[i])(buf, io);
     }
 
     /* Done */

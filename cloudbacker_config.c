@@ -74,14 +74,6 @@
 #define FUSE_MAX_DAEMON_TIMEOUT_STRING  cbquote(FUSE_MAX_DAEMON_TIMEOUT)
 #endif  /* __APPLE__ */
 
-/* Block counting info */
-struct list_blocks {
-    u_int       *bitmap;
-    int         print_dots;
-    uintmax_t   count;
-};
-#define BLOCKS_PER_DOT                  0x100
-
 /****************************************************************************
  *                          FUNCTION DECLARATIONS                           *
  ****************************************************************************/
@@ -95,7 +87,6 @@ static int handle_unknown_option(void *data, const char *arg, int key, struct fu
 static void syslog_logger(int level, const char *fmt, ...) __attribute__ ((__format__ (__printf__, 2, 3)));
 static void stderr_logger(int level, const char *fmt, ...) __attribute__ ((__format__ (__printf__, 2, 3)));
 static int validate_config(void);
-static void list_blocks_callback(void *arg, cb_block_t block_num);
 static void dump_config(void);
 static void usage(void);
 
@@ -273,6 +264,11 @@ static const struct fuse_opt option_list[] = {
     {
         .templ=     "--listBlocks",
         .offset=    offsetof(struct cb_config, list_blocks),
+        .value=     1
+    },
+    {
+        .templ=     "--listBlocksAsync",
+        .offset=    offsetof(struct cb_config, list_blocks_async),
         .value=     1
     },
     {
@@ -729,7 +725,7 @@ cb_config_print_stats(void *prarg, printer_t *printer)
         (*printer)(prarg, "%-28s %u\n", "http_normal_blocks_written", http_io_stats.normal_blocks_written);
         (*printer)(prarg, "%-28s %u\n", "http_zero_blocks_read", http_io_stats.zero_blocks_read);
         (*printer)(prarg, "%-28s %u\n", "http_zero_blocks_written", http_io_stats.zero_blocks_written);
-        if (config.list_blocks) {
+        if (config.list_blocks || config.list_blocks_async) {
             (*printer)(prarg, "%-28s %u\n", "http_empty_blocks_read", http_io_stats.empty_blocks_read);
             (*printer)(prarg, "%-28s %u\n", "http_empty_blocks_written", http_io_stats.empty_blocks_written);
         }
@@ -1521,16 +1517,24 @@ validate_config(void)
     config.fuse_ops.log = config.log;
 
     /* If `--listBlocks' was given, build non-empty block bitmap */
-    if (config.erase || config.reset)
+    if (config.erase || config.reset) {
         config.list_blocks = 0;
+        config.list_blocks_async = 0;
+    }
+
+    if (config.list_blocks_async && config.list_blocks) {
+	warnx("cloudbacker: asynchronous block listing mode overrides synchronous one\n");
+	config.list_blocks = 0;
+    }
+
     if (config.list_blocks) {
         struct cloudbacker_store *temp_store;
-        struct list_blocks lb;
+        struct http_list_blocks lb;
         size_t nwords;
 
         /* Logging */
         if (!config.quiet) {
-            fprintf(stderr, "cloudbacker: listing non-zero blocks...\n");
+            fprintf(stderr, "cloudbacker: listing non-zero blocks synchronously...\n");
             fflush(stderr);
         }
 
@@ -1544,10 +1548,12 @@ validate_config(void)
             err(1, "calloc");
         lb.print_dots = !config.quiet;
         lb.count = 0;
+	lb.mutex = NULL;
+        lb.async = 0;
 
         /* Generate non-zero block bitmap */
         assert(config.http_io.nonzero_bitmap == NULL);
-        if ((r = (*temp_store->list_blocks)(temp_store, list_blocks_callback, &lb)) != 0)
+        if ((r = (*temp_store->list_blocks)(temp_store, http_list_blocks_callback, &lb)) != 0)
             errx(1, "can't list blocks: %s", strerror(r));
 
         /* Close temporary store */
@@ -1555,12 +1561,26 @@ validate_config(void)
 
         /* Save generated bitmap */
         config.http_io.nonzero_bitmap = lb.bitmap;
+        config.http_io.nonzero_bitmap_complete = HTTP_IO_BITMAP_DONE;
 
         /* Logging */
         if (!config.quiet) {
             fprintf(stderr, "done\n");
             warnx("found %ju non-zero blocks", lb.count);
         }
+    } else {
+        size_t nwords;
+        u_int *bitmap;
+
+        nwords = (config.num_blocks + (sizeof(*bitmap) * 8) - 1) / (sizeof(*bitmap) * 8);
+        if ((bitmap = calloc(nwords, sizeof(*bitmap))) == NULL)
+            err(1, "calloc");
+
+        config.http_io.nonzero_bitmap = bitmap;
+	if (config.list_blocks_async)
+	    config.http_io.nonzero_bitmap_complete = HTTP_IO_BITMAP_ASYNC;
+	else
+	    config.http_io.nonzero_bitmap_complete = HTTP_IO_BITMAP_NONE;
     }
 
     /* Done */
@@ -1636,20 +1656,6 @@ validate_credentials(void /*struct http_io_conf http_io*/)
        return -1;  
 
    return 0;
-}
-
-static void
-list_blocks_callback(void *arg, cb_block_t block_num)
-{
-    struct list_blocks *const lb = arg;
-    const int bits_per_word = sizeof(*lb->bitmap) * 8;
-
-    lb->bitmap[block_num / bits_per_word] |= 1 << (block_num % bits_per_word);
-    lb->count++;
-    if (lb->print_dots && (lb->count % BLOCKS_PER_DOT) == 0) {
-        fprintf(stderr, ".");
-        fflush(stderr);
-    }
 }
 
 static void

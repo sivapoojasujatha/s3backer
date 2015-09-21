@@ -55,7 +55,7 @@
 
 /* GS specific storage class definition */
 #define SCLASS_GS_NEARLINE             "NEARLINE"
-#define SCLASS_GS_DRA		       "DURABLE_REDUCED_AVAILABILITY"
+#define SCLASS_GS_DRA                  "DURABLE_REDUCED_AVAILABILITY"
 
 /* Upload/download indexes */
 #define HTTP_DOWNLOAD       0
@@ -111,7 +111,7 @@
 #define WHITESPACE                  " \t\v\f\r\n"
 
 /* cloudbacker storage prefix */
-typedef enum {GS_STORAGE, S3_STORAGE}storage_type;
+typedef enum {GS_STORAGE, S3_STORAGE} storage_type;
 
 /* Statistics structure for http_io store */
 struct http_io_evst {
@@ -172,8 +172,11 @@ struct http_io_private {
     struct http_io_stats        stats;
     LIST_HEAD(, curl_holder)    curls;
     pthread_mutex_t             mutex;
-    u_int                       *non_zero;      // config->nonzero_bitmap is moved to here
-    pthread_t                   auth_thread;    // IAM credentials refresh thread
+    u_int                       *non_zero;              // config->nonzero_bitmap is moved to here
+    u_int                       non_zero_complete;      // flag to indicate that the non-zero block bitmap
+                                                        // has been fully populated by listing existing blocks
+    pthread_t                   block_list_thread;      // IAM credentials refresh thread
+    pthread_t                   auth_thread;            // IAM credentials refresh thread
     u_char                      shutting_down;
 
     /* Encryption info */
@@ -191,6 +194,26 @@ struct http_io_bufs {
     const char  *wrdata;
 };
 
+/* List blocks support */
+enum {
+    HTTP_IO_BITMAP_NONE,
+    HTTP_IO_BITMAP_ASYNC,
+    HTTP_IO_BITMAP_DONE
+};
+
+#define BLOCKS_PER_DOT                  0x100
+
+struct http_list_blocks {
+    u_int               *bitmap;
+    int         	print_dots;
+    pthread_mutex_t     *mutex;
+    uintmax_t           count;
+    u_int               async;
+};
+
+void http_list_blocks_callback(void *arg, cb_block_t block_num);
+
+
 /* Header parsing */
 struct http_io;
 typedef void (*header_parser_t)(char *buf, struct http_io *io);
@@ -205,7 +228,7 @@ struct http_io {
     struct http_io_bufs bufs;
 
     // NULL-terminated header parser vector
-    const header_parser_t	*header_parser;
+    const header_parser_t       *header_parser;
 
     // XML parser and bucket listing info
     XML_Parser          xml;                    // XML parser
@@ -217,7 +240,7 @@ struct http_io {
     int                 xml_text_len;           // # chars in 'xml_text' buffer
     int                 xml_text_max;           // max chars in 'xml_text' buffer
     int                 list_truncated;         // returned list was truncated
-    cb_block_t         last_block;             // last dirty block listed
+    cb_block_t          last_block;             // last dirty block listed
     block_list_func_t   *callback_func;         // callback func for listing blocks
     void                *callback_arg;          // callback arg for listing blocks
     struct http_io_conf *config;                // configuration
@@ -233,7 +256,7 @@ struct http_io {
     u_int               *content_lengthp;       // Returned Content-Length
     uintmax_t           file_size;              // file size from "x-[amz]/[goog]-meta-*backer-filesize"
     u_int               block_size;             // block size from "x-[amz]/[goog]-meta-*backer-blocksize"
-    u_int		name_hash;		// object name hashing from "x-[amz]/[goog]-meta-*backer-namehash"
+    u_int               name_hash;              // object name hashing from "x-[amz]/[goog]-meta-*backer-namehash"
     u_int               expect_304;             // a verify request; expect a 304 response
     u_char              md5[MD5_DIGEST_LENGTH]; // parsed ETag header
     u_char              hmac[SHA_DIGEST_LENGTH];// parsed "x-[amz]/[goog]-meta-cloudbacker.hmac" header
@@ -245,13 +268,13 @@ struct http_io {
 
 /* Generic configuration info structure for http_io store */
 struct http_io_conf {
-    struct auth_conf	      auth;
+    struct auth_conf          auth;
     struct http_io_parameters *http_io_params;
-    char		*accessId;
-    char		*accessKey;
-    char		*ec2iam_role;
+    char                *accessId;
+    char                *accessKey;
+    char                *ec2iam_role;
     char                *bucket;
-    const char          *accessType;	
+    const char          *accessType;
     const char          *authVersion;
     const char          *baseURL;
     const char          *region;
@@ -264,14 +287,15 @@ struct http_io_conf {
     cb_block_t          last_block;                 // last dirty block listed
     u_int               maxKeys;
     u_int               key_length;
-    u_int		name_hash;
+    u_int               name_hash;
     int                 debug;
     int                 debug_http;
     int                 quiet;
     int                 compress;                   // zlib compression level
     int                 vhost;                      // use virtual host style URL
-    int  		storage_prefix;             // GS_STORAGE or S3_STORAGE
+    int                 storage_prefix;             // GS_STORAGE or S3_STORAGE
     u_int               *nonzero_bitmap;            // is set to NULL by http_io_create()
+    u_int               nonzero_bitmap_complete;
     int                 insecure;
     u_int               block_size;
     off_t               num_blocks;
