@@ -35,10 +35,11 @@ struct test_io_private {
 };
 
 /* cloudbacker_store functions */
-static int test_io_meta_data(struct cloudbacker_store *cb, off_t *file_sizep, u_int *block_sizep, u_int *name_hashp);
+static int test_io_meta_data(struct cloudbacker_store *cb);
 static int test_io_set_mounted(struct cloudbacker_store *cb, int *old_valuep, int new_value);
 static int test_io_read_block(struct cloudbacker_store *cb, cb_block_t block_num, void *dest,
   u_char *actual_md5, const u_char *expect_md5, int strict);
+static int test_io_set_meta_data(struct cloudbacker_store *cb, int operation);
 static int test_io_write_block(struct cloudbacker_store *cb, cb_block_t block_num, const void *src, u_char *md5,
   check_cancel_t *check_cancel, void *check_cancel_arg);
 static int test_io_read_block_part(struct cloudbacker_store *cb, cb_block_t block_num, u_int off, u_int len, void *dest);
@@ -64,6 +65,7 @@ test_io_create(struct http_io_conf *config)
     cb->meta_data = test_io_meta_data;
     cb->set_mounted = test_io_set_mounted;
     cb->read_block = test_io_read_block;
+    cb->set_meta_data = test_io_set_meta_data;
     cb->write_block = test_io_write_block;
     cb->read_block_part = test_io_read_block_part;
     cb->write_block_part = test_io_write_block_part;
@@ -86,7 +88,7 @@ test_io_create(struct http_io_conf *config)
 }
 
 static int
-test_io_meta_data(struct cloudbacker_store *cb, off_t *file_sizep, u_int *block_sizep, uint *name_hashp)
+test_io_meta_data(struct cloudbacker_store *cb)
 {
     return 0;
 }
@@ -215,6 +217,12 @@ test_io_read_block(struct cloudbacker_store *const cb, cb_block_t block_num, voi
 
     /* Done */
     return r;
+}
+
+static int
+test_io_set_meta_data(struct cloudbacker_store *cb, int operation)
+{
+    return 0; 
 }
 
 static int

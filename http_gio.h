@@ -37,6 +37,7 @@
 #define HTTP_PRECONDITION_FAILED    412
 #define AUTH_HEADER                 "Authorization"
 #define CTYPE_HEADER                "Content-Type"
+#define CONTENT_LENGTH              "Content-length"
 #define CONTENT_ENCODING_HEADER     "Content-Encoding"
 #define ETAG_HEADER                 "ETag"
 #define CONTENT_ENCODING_DEFLATE    "deflate"
@@ -62,13 +63,16 @@
 #define HTTP_UPLOAD         1
 
 /* MIME type for mounted flag */
-#define MOUNTED_FLAG_CONTENT_TYPE   "text/plain"
+#define MOUNTED_FLAG_CONTENT_TYPE       "text/plain"
 
 /* Mounted file object name */
-#define MOUNTED_FLAG                "cloudbacker-mounted"
+#define MOUNTED_FLAG                    "cloudbacker-mounted"
 
+/* zero filled meta data block name */
+#define ZERO_FILLED_META_DATA_BLOCK     "cloudbacker-zerosize-metadata"
+ 
 /* MIME type for blocks */
-#define CONTENT_TYPE                "application/x-cloudbacker-block"
+#define CONTENT_TYPE                    "application/x-cloudbacker-block"
 
 /* HTTP `Date' and `x-amz-date' header formats */
 #define HTTP_DATE_HEADER            "Date"
@@ -257,6 +261,9 @@ struct http_io {
     uintmax_t           file_size;              // file size from "x-[amz]/[goog]-meta-*backer-filesize"
     u_int               block_size;             // block size from "x-[amz]/[goog]-meta-*backer-blocksize"
     u_int               name_hash;              // object name hashing from "x-[amz]/[goog]-meta-*backer-namehash"
+    u_int               compression_level;      // if compression is used or not "x-[amz]/[goog]-meta-*backer-compression_level"   
+    u_int               is_encrypted;           // if encrypt flag is used or not "x-[amz]/[goog]-meta-*backer-encryption" 
+    char                *encryption_cipher;     // encryption cipher used  "x-[amz]/[goog]-meta-*backer-encryption-cipher"
     u_int               expect_304;             // a verify request; expect a 304 response
     u_char              md5[MD5_DIGEST_LENGTH]; // parsed ETag header
     u_char              hmac[SHA_DIGEST_LENGTH];// parsed "x-[amz]/[goog]-meta-cloudbacker.hmac" header
@@ -266,10 +273,23 @@ struct http_io {
     char                *StorageClass;          // get storage class attribute of GS bucket
 };
 
+/* http IO meta data parameters structure */
+struct http_io_meta_data {
+
+    u_int                       block_size;
+    u_int                       name_hash;
+    uintmax_t                   file_size;
+    off_t                       num_blocks;
+    u_int                       compression_level;
+    u_int                       is_encrypted;
+    char                        *encryption_cipher;
+};
+
 /* Generic configuration info structure for http_io store */
 struct http_io_conf {
     struct auth_conf          auth;
     struct http_io_parameters *http_io_params;
+    struct http_io_meta_data  http_metadata;
     char                *accessId;
     char                *accessKey;
     char                *ec2iam_role;
@@ -282,7 +302,7 @@ struct http_io_conf {
     const char          *user_agent;
     const char          *cacert;
     const char          *password;
-    const char          *encryption;
+    char                *encryption;
     const char          *storageClass;
     cb_block_t          last_block;                 // last dirty block listed
     u_int               maxKeys;
@@ -340,6 +360,7 @@ http_io_curl_prepper_t http_io_list_prepper;
 void http_io_get_block_url(char *buf, size_t bufsiz, struct http_io_conf *config, cb_block_t block_num);
 void http_io_get_mounted_flag_url(char *buf, size_t bufsiz, struct http_io_conf *config);
 void http_io_get_bucket_url(char *buf, size_t bufsiz, struct http_io_conf *config);
+void http_io_get_meta_data_block_url(char *buf, size_t bufsiz, struct http_io_conf *config);
 
 /* Bucket listing functions */
 size_t http_io_curl_list_reader(const void *ptr, size_t size, size_t nmemb, void *stream);
@@ -374,6 +395,9 @@ int http_io_strcasecmp_ptr(const void *ptr1, const void *ptr2);
 void file_size_parser(char *buf, struct http_io *io);
 void block_size_parser(char *buf, struct http_io *io);
 void name_hash_parser(char *buf, struct http_io *io);
+void compression_parser(char *buf, struct http_io *io);
+void encryption_parser(char *buf, struct http_io *io);
+void encryption_cipher_parser(char *buf, struct http_io *io);
 void etag_parser(char *buf, struct http_io *io);
 void hmac_parser(char *buf, struct http_io *io);
 void encoding_parser(char *buf, struct http_io *io);

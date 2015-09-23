@@ -28,12 +28,13 @@
 //#include <stdlib.h>
 
 /* cloudbacker_store functions */
-static int http_io_meta_data(struct cloudbacker_store *cb, off_t *file_sizep, u_int *block_sizep, u_int *name_hashp);
+static int http_io_meta_data(struct cloudbacker_store *cb);
 static int http_io_set_mounted(struct cloudbacker_store *cb, int *old_valuep, int new_value);
 static int http_io_read_block(struct cloudbacker_store *cb, cb_block_t block_num, void *dest,
   u_char *actual_md5, const u_char *expect_md5, int strict);
 static int http_io_write_block(struct cloudbacker_store *cb, cb_block_t block_num, const void *src, u_char *md5,
   check_cancel_t *check_cancel, void *check_cancel_arg);
+static int http_io_set_meta_data(struct cloudbacker_store *cb, int operation);
 static int http_io_read_block_part(struct cloudbacker_store *cb, cb_block_t block_num, u_int off, u_int len, void *dest);
 static int http_io_write_block_part(struct cloudbacker_store *cb, cb_block_t block_num, u_int off, u_int len, const void *src);
 static int http_io_list_blocks(struct cloudbacker_store *cb, block_list_func_t *callback, void *arg);
@@ -54,8 +55,9 @@ static u_char zero_hmac[SHA_DIGEST_LENGTH];
 
 /* NULL-terminated vector of header parsers */
 header_parser_t cb_header_parser[] = {
-  file_size_parser, block_size_parser, name_hash_parser,
-  etag_parser, hmac_parser, encoding_parser, NULL
+    file_size_parser, block_size_parser, name_hash_parser,
+    compression_parser, encryption_parser, encryption_cipher_parser, etag_parser, 
+    hmac_parser, encoding_parser, NULL
 };
 
 
@@ -164,6 +166,7 @@ http_io_create(struct http_io_conf *config)
     /* generic functions */ 
     cb->meta_data = http_io_meta_data;
     cb->set_mounted = http_io_set_mounted;
+    cb->set_meta_data = http_io_set_meta_data;
     cb->read_block = http_io_read_block;
     cb->write_block = http_io_write_block;
     cb->read_block_part = http_io_read_block_part;
@@ -546,7 +549,7 @@ http_io_list_blocks(struct cloudbacker_store *cb, block_list_func_t *callback, v
        
         snprintf(urlbuf + strlen(urlbuf), sizeof(urlbuf) - strlen(urlbuf), "%s=%u", LIST_PARAM_MAX_KEYS, config->maxKeys);
         snprintf(urlbuf + strlen(urlbuf), sizeof(urlbuf) - strlen(urlbuf), "&%s=%s", LIST_PARAM_PREFIX, config->prefix);
-       
+      
         /* Add Date header */
         http_io_add_date(priv, &io, now);
 
@@ -651,6 +654,62 @@ void name_hash_parser(char *buf, struct http_io *io)
     }
 }
 
+void compression_parser(char *buf, struct http_io *io)
+{
+    char delim[] = ": ";
+    char* token;
+    if (strstr(buf, io->config->http_io_params->compression_level_header)){
+        for (token = strtok(buf, delim); token; token = strtok(NULL, delim)){
+            if (!strstr(token, io->config->http_io_params->compression_level_header)){
+               (void) sscanf(token, "%u", &io->compression_level);               
+            }
+        }
+    }
+}
+
+void encryption_parser(char *buf, struct http_io *io)
+{
+    char delim[] = ": ";
+    char* token;
+    if (strstr(buf, io->config->http_io_params->encrypted_header)){
+        for (token = strtok(buf, delim); token; token = strtok(NULL, delim)){
+            if (!strstr(token, io->config->http_io_params->encrypted_header)){
+                char pbuf[8];
+                if (sscanf(token,  "%s", pbuf)) {
+                    if (strncmp(pbuf, "yes", sizeof("yes")) == 0)
+                        io->is_encrypted = 1;
+                     else
+                        io->is_encrypted = 0;
+                }
+            }
+        }
+    }
+}
+
+void encryption_cipher_parser(char *buf, struct http_io *io)
+{
+    char delim[] = ": ";
+    char* token;
+    if (strstr(buf, io->config->http_io_params->encryption_cipher_header)){
+        for (token = strtok(buf, delim); token; token = strtok(NULL, delim)){
+           if (!strstr(token, io->config->http_io_params->encryption_cipher_header)){
+               char c[20];
+               int i,j=0;
+               /* due to some reason http response is having cipher format cipher-name\r\n */
+               /* remove CRLF characters */
+               for(i=0; i< strlen(token); i++) {
+                   if(token[i] != '\n' && token[i] != '\r') {
+                       c[j] = token[i];
+                       j++;
+                   }
+               }
+               c[j] = '\0';
+               io->encryption_cipher = strdup(c);
+           } 
+        } 
+    }
+}
+
 void etag_parser(char *buf, struct http_io *io)
 {
     char fmtbuf[64];
@@ -736,11 +795,11 @@ http_io_parse_block(struct http_io_conf *config, const char *name, cb_block_t *b
     return 0;
 }
 static int
-http_io_meta_data(struct cloudbacker_store *cb, off_t *file_sizep, u_int *block_sizep, u_int *name_hashp)
+http_io_meta_data(struct cloudbacker_store *cb)
 {
     struct http_io_private *const priv = cb->data;
     struct http_io_conf *const config = priv->config;
-    char urlbuf[URL_BUF_SIZE(config)];
+    char urlbuf[URL_BUF_SIZE(config)+sizeof(ZERO_FILLED_META_DATA_BLOCK)];
     const time_t now = time(NULL);
     struct http_io io;
     int r = 0;
@@ -752,7 +811,7 @@ http_io_meta_data(struct cloudbacker_store *cb, off_t *file_sizep, u_int *block_
     io.method = HTTP_HEAD;
 
     /* Construct URL for the first block */
-    http_io_get_block_url(urlbuf, sizeof(urlbuf), config, 0);
+    http_io_get_meta_data_block_url(urlbuf, sizeof(urlbuf), config);
 
     /* Add Date header */
     http_io_add_date(priv, &io, now);
@@ -764,15 +823,18 @@ http_io_meta_data(struct cloudbacker_store *cb, off_t *file_sizep, u_int *block_
     /* Perform operation */
     if ((r = http_io_perform_io(priv, &io, http_io_head_prepper)) != 0)
         goto done;
-
     /* Extract filesystem sizing information */
     if (io.file_size == 0 || io.block_size == 0) {
         r = ENOENT;
         goto done;
     }
-    *file_sizep = (off_t)io.file_size;
-    *block_sizep = io.block_size;
-    *name_hashp = io.name_hash;
+    config->http_metadata.file_size = (uintmax_t)io.file_size;
+    config->http_metadata.block_size = io.block_size;
+    config->http_metadata.name_hash = io.name_hash;
+    config->http_metadata.compression_level = io.compression_level;
+    config->http_metadata.is_encrypted = io.is_encrypted;
+    if(config->http_metadata.is_encrypted)
+        config->http_metadata.encryption_cipher = strdup(io.encryption_cipher);
 
 done:
     /*  Clean up */
@@ -1205,6 +1267,92 @@ fail:
     curl_slist_free_all(io.headers);
     return r;
 }
+
+/*
+ * Write meta data block. This block will have zero data.
+ * We are writing only user defined meta data like 
+ * filesystem size
+ * block size
+ * name Hashing for blocks
+ * encryption cipher or algorithm
+ * compression flag
+ */
+
+static int 
+http_io_set_meta_data(struct cloudbacker_store *cb, int operation)
+{
+    struct http_io_private *const priv = cb->data;
+    struct http_io_conf *const config = priv->config;
+    char urlbuf[URL_BUF_SIZE(config)+ sizeof(ZERO_FILLED_META_DATA_BLOCK)+strlen(config->prefix)];
+    const time_t now = time(NULL);
+    struct http_io io;
+    int r;
+    const int zero_contentLength = 0;
+
+    /* Initialize I/O info */
+    memset(&io, 0, sizeof(io));
+    io.url = urlbuf;
+    io.method = (operation ? HTTP_PUT : HTTP_DELETE);
+    io.buf_size = 0;   /* write zero content block */
+
+    /* Construct URL for this block */
+    http_io_get_meta_data_block_url(urlbuf, sizeof(urlbuf), config);
+    
+    /* Add Date header */
+    http_io_add_date(priv, &io, now);
+       
+    /* Add Content-Type header */
+   io.headers = http_io_add_header(io.headers, "%s: %s", CTYPE_HEADER, MOUNTED_FLAG_CONTENT_TYPE);
+
+    /* Add Content-Length header with zero */
+    io.headers = http_io_add_header(io.headers, "%s: %d", CONTENT_LENGTH, zero_contentLength);
+
+    /* Add ACL header (PUT only) */
+    io.headers = http_io_add_header(io.headers, "%s: %s", priv->config->http_io_params->acl_header,priv->config->http_io_params->acl_headerval);
+
+    /* Add meta-data headers  */
+    io.headers = http_io_add_header(io.headers, "%s: %u", priv->config->http_io_params->block_size_header,
+                                                          config->http_metadata.block_size);
+
+    io.headers = http_io_add_header(io.headers, "%s: %ju", priv->config->http_io_params->file_size_header , 
+                                                          (uintmax_t)(config->http_metadata.file_size));
+
+    io.headers = http_io_add_header(io.headers, "%s: %s", priv->config->http_io_params->name_hash_header, config->http_metadata.name_hash ? "yes" : "no");
+
+
+    io.headers = http_io_add_header(io.headers, "%s: %s", priv->config->http_io_params->encrypted_header, config->http_metadata.is_encrypted ? "yes" : "no");
+
+    if(config->http_metadata.encryption_cipher != NULL)
+        io.headers = http_io_add_header(io.headers, "%s: %s", priv->config->http_io_params->encryption_cipher_header, 
+                                                              config->http_metadata.encryption_cipher);
+    io.headers = http_io_add_header(io.headers, "%s: %d", priv->config->http_io_params->compression_level_header, config->http_metadata.compression_level);
+    
+    /* Add storage class header (if needed) */
+    if (strcasecmp(config->storageClass, SCLASS_S3_REDUCED_REDUNDANCY)==0){
+        io.headers = http_io_add_header(io.headers, "%s: %s", priv->config->http_io_params->storage_class_header, 
+                                                              priv->config->http_io_params->storage_class_headerval);
+    }
+
+    /* Add Authorization header */
+    if ((r = http_io_add_auth(priv, &io, now, io.src, io.buf_size)) != 0)
+        goto fail;
+
+    /* Perform operation */
+    r = http_io_perform_io(priv, &io, http_io_write_prepper);
+    if(r == 0) {
+        /*  Clean up */
+        curl_slist_free_all(io.headers);
+        return r;
+    }
+    goto fail;
+
+  
+fail:
+    /*  Clean up */
+    curl_slist_free_all(io.headers);
+    return r;
+}
+
 /*
  * Write block if src != NULL, otherwise delete block.
  */
@@ -1377,13 +1525,6 @@ http_io_write_block(struct cloudbacker_store *const cb, cb_block_t block_num, co
     if (src != NULL)
         io.headers = http_io_add_header(io.headers, "%s: %s", priv->config->http_io_params->acl_header,priv->config->http_io_params->acl_headerval);
 
-    /* Add file size meta-data to zero'th block */
-    if (src != NULL && block_num == 0) {
-        io.headers = http_io_add_header(io.headers, "%s: %u", priv->config->http_io_params->block_size_header, priv->config->http_io_params->block_size_headerval);
-        io.headers = http_io_add_header(io.headers, "%s: %ju", priv->config->http_io_params->file_size_header, (uintmax_t)(config->block_size * config->num_blocks));
-        io.headers = http_io_add_header(io.headers, "%s: %s",priv->config->http_io_params->name_hash_header, config->name_hash ? "yes" : "no");
-    }
-
     /* Add signature header (if encrypting) */
     if (src != NULL && config->encryption != NULL)
         io.headers = http_io_add_header(io.headers, "%s: \"%s\"", priv->config->http_io_params->HMAC_Header, hmacbuf);
@@ -1448,6 +1589,24 @@ http_io_add_auth(struct http_io_private *priv, struct http_io *const io, time_t 
     const struct http_io_conf *const config = priv->config;
     
     return (*config->authenticate)(priv, io, now, payload, plen);
+}
+
+/*
+ * Create URL for a meta data block, and return pointer to the URL's URI path.
+ */
+void
+http_io_get_meta_data_block_url(char *buf, size_t bufsiz, struct http_io_conf *config)
+{
+    int len;
+
+    if (config->vhost)
+        len = snprintf(buf, bufsiz, "%s%s%s", config->baseURL, config->prefix, ZERO_FILLED_META_DATA_BLOCK);
+    else {
+        len = snprintf(buf, bufsiz, "%s%s/%s%s", config->baseURL,
+                       config->bucket, config->prefix, ZERO_FILLED_META_DATA_BLOCK);
+    }
+    (void)len;                  /* avoid compiler warning when NDEBUG defined */
+    assert(len < bufsiz);
 }
 
 /*

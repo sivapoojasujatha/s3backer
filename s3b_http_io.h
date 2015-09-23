@@ -46,8 +46,11 @@
 /* S3-specific HTTP definitions */
 #define S3B_FILE_SIZE_HEADER            "x-amz-meta-s3backer-filesize"
 #define S3B_BLOCK_SIZE_HEADER           "x-amz-meta-s3backer-blocksize"
+#define S3B_COMPRESSION_LEVEL_HEADER    "x-amz-meta-s3backer-compresson-level"
+#define S3B_ENCRYPTED_HEADER            "x-amz-meta-s3backer-encrypted"
+#define S3B_ENCRYPTION_HEADER           "x-amz-meta-s3backer-encryption-cipher"
 #define S3B_NAME_HASH_HEADER            "x-amz-meta-s3backer-namehash"
-#define S3B_HMAC_HEADER                 "x-amz-meta-s3backer.hmac"
+#define S3B_HMAC_HEADER                 "x-amz-meta-s3backer-hmac"
 #define S3B_ACL_HEADER                  "x-amz-acl"
 #define S3B_CONTENT_SHA256_HEADER       "x-amz-content-sha256"
 #define S3B_STORAGE_CLASS_HEADER        "x-amz-storage-class"

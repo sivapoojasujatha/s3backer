@@ -111,10 +111,11 @@ struct cbinfo {
 };
 
 /* cloudbacker_store functions */
-static int ec_protect_meta_data(struct cloudbacker_store *cb, off_t *file_sizep, u_int *block_sizep, u_int *name_hashp);
+static int ec_protect_meta_data(struct cloudbacker_store *cb);
 static int ec_protect_set_mounted(struct cloudbacker_store *cb, int *old_valuep, int new_value);
 static int ec_protect_read_block(struct cloudbacker_store *cb, cb_block_t block_num, void *dest,
   u_char *actual_md5, const u_char *expect_md5, int strict);
+static int ec_protect_set_meta_data(struct cloudbacker_store *cb, int operation);
 static int ec_protect_write_block(struct cloudbacker_store *cb, cb_block_t block_num, const void *src, u_char *md5,
   check_cancel_t *check_cancel, void *check_cancel_arg);
 static int ec_protect_read_block_part(struct cloudbacker_store *cb, cb_block_t block_num, u_int off, u_int len, void *dest);
@@ -164,6 +165,7 @@ ec_protect_create(struct ec_protect_conf *config, struct cloudbacker_store *inne
     cb->meta_data = ec_protect_meta_data;
     cb->set_mounted = ec_protect_set_mounted;
     cb->read_block = ec_protect_read_block;
+    cb->set_meta_data = ec_protect_set_meta_data;
     cb->write_block = ec_protect_write_block;
     cb->read_block_part = ec_protect_read_block_part;
     cb->write_block_part = ec_protect_write_block_part;
@@ -213,11 +215,11 @@ fail0:
 }
 
 static int
-ec_protect_meta_data(struct cloudbacker_store *cb, off_t *file_sizep, u_int *block_sizep, u_int *name_hashp)
+ec_protect_meta_data(struct cloudbacker_store *cb)
 {
     struct ec_protect_private *const priv = cb->data;
 
-    return (*priv->inner->meta_data)(priv->inner, file_sizep, block_sizep, name_hashp);
+    return (*priv->inner->meta_data)(priv->inner);
 }
 
 static int
@@ -227,6 +229,15 @@ ec_protect_set_mounted(struct cloudbacker_store *cb, int *old_valuep, int new_va
 
     return (*priv->inner->set_mounted)(priv->inner, old_valuep, new_value);
 }
+
+static int
+ec_protect_set_meta_data(struct cloudbacker_store *cb, int operation)
+{
+    struct ec_protect_private *const priv = cb->data;
+
+    return (*priv->inner->set_meta_data)(priv->inner, operation);
+}
+
 
 static int
 ec_protect_flush(struct cloudbacker_store *const cb)

@@ -39,6 +39,10 @@ void set_http_io_s3b_params(struct http_io_conf *config)
     strcpy(config->http_io_params->file_size_header, S3B_FILE_SIZE_HEADER);
     strcpy(config->http_io_params->block_size_header, S3B_BLOCK_SIZE_HEADER);
     config->http_io_params->block_size_headerval = config->block_size;
+    strcpy(config->http_io_params->compression_level_header, S3B_COMPRESSION_LEVEL_HEADER);
+    strcpy(config->http_io_params->encrypted_header, S3B_ENCRYPTED_HEADER);
+    strcpy(config->http_io_params->encryption_cipher_header, S3B_ENCRYPTION_HEADER);
+    strcpy(config->http_io_params->name_hash_header, S3B_NAME_HASH_HEADER);
     strcpy(config->http_io_params->HMAC_Header, S3B_HMAC_HEADER);
     strcpy(config->http_io_params->acl_header,S3B_ACL_HEADER);
     strcpy(config->http_io_params->acl_headerval,config->auth.u.s3.accessType);

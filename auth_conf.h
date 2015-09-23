@@ -54,8 +54,12 @@ struct auth_conf {
 
 /* structure holds all http parameters used in cloudbacker store http reqests as per storage type */
 typedef struct http_io_parameters{
+
     char file_size_header[32];
     char block_size_header[32];
+    char compression_level_header[64];
+    char encrypted_header[32];
+    char encryption_cipher_header[40];
     u_int block_size_headerval;
     char HMAC_Header[32];
     char HMAC_Headerval[32];

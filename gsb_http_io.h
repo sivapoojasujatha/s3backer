@@ -48,8 +48,11 @@
 /* HTTP IO specific definitions */
 #define GSB_FILE_SIZE_HEADER            "x-goog-meta-gsbacker-filesize"
 #define GSB_BLOCK_SIZE_HEADER           "x-goog-meta-gsbacker-blocksize"
+#define GSB_COMPRESSION_LEVEL_HEADER    "x-goog-meta-gsbacker-compression-level"
+#define GSB_ENCRYPTED_HEADER            "x-goog-meta-gsbacker-encrypted"
+#define GSB_ENCRYPTION_HEADER           "x-goog-meta-gsbacker-encryption-cipher"
 #define GSB_NAME_HASH_HEADER            "x-goog-meta-gsbacker-namehash"
-#define GSB_HMAC_HEADER                 "x-goog-meta-gsbacker.hmac"
+#define GSB_HMAC_HEADER                 "x-goog-meta-gsbacker-hmac"
 #define GSB_ACL_HEADER                  "x-goog-acl"
 #define GSB_CONTENT_SHA256_HEADER       "x-goog-content-sha256"
 #define GSB_STORAGE_CLASS_HEADER        "x-goog-storage-class"

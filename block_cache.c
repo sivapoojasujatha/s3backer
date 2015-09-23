@@ -167,10 +167,11 @@ struct cbinfo {
 };
 
 /* cloudbacker_store functions */
-static int block_cache_meta_data(struct cloudbacker_store *cb, off_t *file_sizep, u_int *block_sizep, u_int *name_hashp);
+static int block_cache_meta_data(struct cloudbacker_store *cb);
 static int block_cache_set_mounted(struct cloudbacker_store *cb, int *old_valuep, int new_value);
 static int block_cache_read_block(struct cloudbacker_store *cb, cb_block_t block_num, void *dest,
   u_char *actual_md5, const u_char *expect_md5, int strict);
+static int block_cache_set_meta_data(struct cloudbacker_store *cb, int operation);
 static int block_cache_write_block(struct cloudbacker_store *cb, cb_block_t block_num, const void *src, u_char *md5,
   check_cancel_t *check_cancel, void *check_cancel_arg);
 static int block_cache_read_block_part(struct cloudbacker_store *cb, cb_block_t block_num, u_int off, u_int len, void *dest);
@@ -232,6 +233,7 @@ block_cache_create(struct block_cache_conf *config, struct cloudbacker_store *in
     cb->meta_data = block_cache_meta_data;
     cb->set_mounted = block_cache_set_mounted;
     cb->read_block = block_cache_read_block;
+    cb->set_meta_data = block_cache_set_meta_data;
     cb->write_block = block_cache_write_block;
     cb->read_block_part = block_cache_read_block_part;
     cb->write_block_part = block_cache_write_block_part;
@@ -375,11 +377,11 @@ block_cache_dcache_load(void *arg, cb_block_t dslot, cb_block_t block_num, const
 }
 
 static int
-block_cache_meta_data(struct cloudbacker_store *cb, off_t *file_sizep, u_int *block_sizep, u_int *name_hashp)
+block_cache_meta_data(struct cloudbacker_store *cb)
 {
     struct block_cache_private *const priv = cb->data;
 
-    return (*priv->inner->meta_data)(priv->inner, file_sizep, block_sizep, name_hashp);
+    return (*priv->inner->meta_data)(priv->inner);
 }
 
 static int
@@ -707,6 +709,14 @@ fail:
     free(data);
     free(entry);
     return r;
+}
+
+static int
+block_cache_set_meta_data(struct cloudbacker_store *cb, int operation)
+{
+    struct block_cache_private *const priv = cb->data;
+
+    return (*priv->inner->set_meta_data)(priv->inner, operation);
 }
 
 static int

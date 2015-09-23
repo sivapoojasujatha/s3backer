@@ -119,7 +119,7 @@ struct cloudbacker_store {
      *  ENOENT  Information not found
      *  Other   Other error
      */
-    int         (*meta_data)(struct cloudbacker_store *cb, off_t *file_sizep, u_int *block_sizep, u_int *name_hashp);
+    int         (*meta_data)(struct cloudbacker_store *cb);
 
     /*
      * Read and (optionally) set the mounted flag.
@@ -162,6 +162,17 @@ struct cloudbacker_store {
      * Returns zero on success or a (positive) errno value on error.
      */
     int         (*read_block_part)(struct cloudbacker_store *cb, cb_block_t block_num, u_int off, u_int len, void *dest);
+
+    /*
+     * Write meta data block. This block will have zero data.
+     * We are writing only user defined meta data like
+     * filesystem size
+     * block size
+     * name Hashing for blocks
+     * encryption cipher or algorithm
+     * compression flag
+     */
+    int         (*set_meta_data)(struct cloudbacker_store *cb, int operation);
 
     /*
      * Write one block.

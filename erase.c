@@ -119,6 +119,12 @@ cloudbacker_erase(struct cb_config *config)
         goto fail3;
     }
 
+    /* delete meta data block */
+    if ((r = (*priv->cb->set_meta_data)(priv->cb, 0)) != 0) {
+        warnx("can't delete meta data block: %s", strerror(r));
+        goto fail3;
+    }
+
     /* Success */
     ok = 1;
 
