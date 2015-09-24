@@ -134,17 +134,23 @@ When the
 .Fl \-listBlocks
 flag is given,
 .Nm
-will list all existing blocks at startup so it knows ahead of time exactly which blocks are empty.
-.Ss File and Block Size Auto-Detection
-As a convenience, whenever the first block of the backed file is written,
+will list all existing blocks synchronously at startup so it knows ahead of time exactly which blocks are empty.
+When the
+.Fl \-listBlocksAsync
+flag is given,
 .Nm
-includes as meta-data (in the ``x-amz-meta-s3backer-filesize' or `x-goog-meta-gsbacker-filesize'' header) the total size of the file.
-Along with the size of the block itself, this value can be checked and/or auto-detected later when
-the filesystem is remounted, eliminating the need for the
+will list all existing blocks asynchronously and file system is mounted while listing is in progress.
+.Ss File and Block Size Auto-Detection
+As a convenience, a separate meta data block 'cloudbacker-zerosize-metadata' is written with zero contents and includes
+.Nm
+meta-data like total backed file system size, block size, name hashing setting, encryption setting, encryption cipher if 
+encryption is enabled, and compression level.
+Before mounting, file system configuration is auto-detected using this meta data block and will be used to validate against the
+configured parameters, later when the filesystem is remounted, eliminating the need for the
 .Fl \-blockSize
 or
 .Fl \-size
-flags to be explicitly provided and avoiding accidental mis-interpretation of an existing filesystem.
+flags and other meta data flags to be explicitly provided and avoiding accidental mis-interpretation of an existing filesystem.
 .Ss Block Cache
 .Nm
 includes support for an internal block cache to increase performance.
@@ -606,6 +612,11 @@ This flag is useful when creating a new backed file, or any time it is expected 
 blocks will be read or written, such as when initializing a new filesystem.
 .Pp
 This flag will slow down startup in direct proportion to the number of blocks that already exist.
+.It Fl \-listBlocksAsync
+Perform a query at backend to determine which blocks already exist.
+Listing blocks asynchronously helps to mount file system in parallel while listing the blocks.
+Asynchronous listing is same as synchronous listingi, except, in synchronous listing of blocks, file system is mounted only after
+listing of blocks is completed.
 .It Fl \-maxUploadSpeed=BITSPERSEC
 .It Fl \-maxDownloadSpeed=BITSPERSEC
 These flags set a limit on the bandwidth utilized for individual block uploads and downloads (i.e.,

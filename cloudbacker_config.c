@@ -943,17 +943,14 @@ validate_config(void)
     struct cloudbacker_store *cb;
     const int customBaseURL = config.http_io.baseURL != NULL;
     const int customRegion = config.http_io.region != NULL;
-    //off_t auto_file_size;
-    //u_int auto_block_size, auto_name_hash;
     uintmax_t value;
     const char *s;
     char blockSizeBuf[64];
     char fileSizeBuf[64];
     struct stat sb;
-    char sClassBuf[64];
     int i;
     int r;
-
+    char sClassBuf[64];
     /* Check bucket/testdir */
     /* bucket name format gs://bucket for GS and s3://bucket for S3 respectively. */
     /* test dir format is path/to/directory */
@@ -1303,9 +1300,10 @@ validate_config(void)
     config.http_io.http_metadata.name_hash = config.http_io.name_hash;
     config.http_io.http_metadata.compression_level = config.http_io.compress;
     config.http_io.http_metadata.is_encrypted = config.encrypt;
-    if( config.http_io.encryption != NULL && config.encrypt){
+    if( config.http_io.encryption != NULL || config.encrypt){
         config.http_io.http_metadata.encryption_cipher = NULL;
         config.http_io.http_metadata.encryption_cipher = strdup(config.http_io.encryption);
+        config.http_io.http_metadata.is_encrypted = 1;
         /* --encrypt flag,implies --compress flag */
         config.http_io.http_metadata.compression_level = config.http_io.compress;
     }
@@ -1547,12 +1545,12 @@ validate_config(void)
 
     /* No point in the caches being bigger than necessary */
     if (config.ec_protect.cache_size > config.num_blocks) {
-        warnx("MD5 cache size (%ju) is greater that the total number of blocks (%ju); automatically reducing",
+        warnx("MD5 cache size (%ju) is greater than the total number of blocks (%ju); automatically reducing",
           (uintmax_t)config.ec_protect.cache_size, (uintmax_t)config.num_blocks);
         config.ec_protect.cache_size = config.num_blocks;
     }
     if (config.block_cache.cache_size > config.num_blocks) {
-        warnx("block cache size (%ju) is greater that the total number of blocks (%ju); automatically reducing",
+        warnx("block cache size (%ju) is greater than the total number of blocks (%ju); automatically reducing",
           (uintmax_t)config.block_cache.cache_size, (uintmax_t)config.num_blocks);
         config.block_cache.cache_size = config.num_blocks;
     }
@@ -1766,7 +1764,7 @@ dump_config(void)
     (*config.log)(LOG_DEBUG, "%24s: %u keys", "maxKeys", config.http_io.maxKeys);
     (*config.log)(LOG_DEBUG, "%24s: \"%s\"", "prefix", config.http_io.prefix);
     (*config.log)(LOG_DEBUG, "%24s: %s", "name hash", config.http_io.name_hash ? "yes" : "no");
-    (*config.log)(LOG_DEBUG, "%24s: %s", "list_blocks", config.list_blocks ? "true" : "false");
+    (*config.log)(LOG_DEBUG, "%24s: %s", "list_blocks", config.list_blocks_async ? "asynchronous" : (config.list_blocks ? "synchronous" : "no"));
     (*config.log)(LOG_DEBUG, "%24s: \"%s\"", "mount", config.mount);
     (*config.log)(LOG_DEBUG, "%24s: \"%s\"", "filename", config.fuse_ops.filename);
     (*config.log)(LOG_DEBUG, "%24s: \"%s\"", "stats_filename", config.fuse_ops.stats_filename);
@@ -1930,6 +1928,7 @@ usage(void)
     fprintf(stderr, "\t--%-27s %s\n", "insecure", "Don't verify SSL server identity");
     fprintf(stderr, "\t--%-27s %s\n", "keyLength", "Override generated cipher key length");
     fprintf(stderr, "\t--%-27s %s\n", "listBlocks", "Auto-detect non-empty blocks at startup");
+    fprintf(stderr, "\t--%-27s %s\n", "listBlocksAsync", "Auto-detect non-empty blocks asynchronously");
     fprintf(stderr, "\t--%-27s %s\n", "maxDownloadSpeed=BITSPERSEC", "Max download bandwith for a single read");
     fprintf(stderr, "\t--%-27s %s\n", "maxRetryPause=MILLIS", "Max total pause after stale data or server error");
     fprintf(stderr, "\t--%-27s %s\n", "maxUploadSpeed=BITSPERSEC", "Max upload bandwith for a single write");
@@ -1968,7 +1967,7 @@ usage(void)
     fprintf(stderr, "\t--%-27s \"%s\"\n", "accessFile", "$HOME/" CLOUDBACKER_DEFAULT_PWD_FILE);
     fprintf(stderr, "\t--%-27s %s\n", "accessId", "The first one listed in `accessFile'");
     fprintf(stderr, "\t--%-27s %s\"%s\"%s\"%s\"\n", "accessType","For GS ", GSBACKER_DEFAULT_ACCESS_TYPE, ", For S3 ",S3BACKER_DEFAULT_ACCESS_TYPE );
-    fprintf(stderr, "\t--%-27s %s\"%s\"%s\"%s\"\n", "authVersion (For GS)","For GS ", GSBACKER_DEFAULT_AUTH_VERSION, ", For S3 ",S3BACKER_DEFAULT_AUTH_VERSION);
+    fprintf(stderr, "\t--%-27s %s\"%s\"%s\"%s\"\n", "authVersion","For GS ", GSBACKER_DEFAULT_AUTH_VERSION, ", For S3 ",S3BACKER_DEFAULT_AUTH_VERSION);
     fprintf(stderr, "\t--%-27s %s\"%s\"%s\"%s\"\n", "baseURL","For GS ", "http://" GS_DOMAIN "/" , ", For S3 ","http://s3." S3_DOMAIN "/");
     fprintf(stderr, "\t--%-27s %u\n", "blockCacheSize", CLOUDBACKER_DEFAULT_BLOCK_CACHE_SIZE);
     fprintf(stderr, "\t--%-27s %u\n", "blockCacheThreads", CLOUDBACKER_DEFAULT_BLOCK_CACHE_NUM_THREADS);

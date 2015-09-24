@@ -537,7 +537,6 @@ update_iam_credentials(struct http_io_private *const priv)
     io.dest = buf;
     io.buf_size = sizeof(buf);
 
-    printf("\n io.url = %s", io.url);
     /* Perform operation */
     (*config->log)(LOG_INFO, "acquiring EC2 IAM credentials from %s", io.url);
     if ((r = http_io_perform_io(priv, &io, http_io_iamcreds_prepper)) != 0) {

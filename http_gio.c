@@ -298,10 +298,14 @@ http_io_create(struct http_io_conf *config)
     curl_global_init(CURL_GLOBAL_ALL);
 
     /* Initialize authentication credentials and start updater thread */
-    if( (r = update_credentials(priv)) != 0)
+    if( (r = update_credentials(priv)) != 0){
+        (*config->log)(LOG_ERR, "failed to update credentials thread : %s", strerror(r));
         goto fail5;
-    if ((r = pthread_create(&priv->auth_thread, NULL, update_credentials_main, priv)) != 0)
+    }
+    if ((r = pthread_create(&priv->auth_thread, NULL, update_credentials_main, priv)) != 0){
+        (*config->log)(LOG_ERR, "failed to create authentication thread: %s", strerror(r));
         goto fail5; 
+    } 
     
     /* Take ownership of non-zero block bitmap */
     priv->non_zero = config->nonzero_bitmap;
@@ -320,8 +324,10 @@ http_io_create(struct http_io_conf *config)
         param->cb = cb;
 
         /* Start asyncronous block listing to populate the non-zero bitmap */
-        if ((r = pthread_create(&priv->block_list_thread, NULL, http_list_blocks_main, param)) != 0)
-            errx(1, "can't create thread to list blocks: %s", strerror(r));
+        if ((r = pthread_create(&priv->block_list_thread, NULL, http_list_blocks_main, param)) != 0){
+            (*config->log)(LOG_ERR, "failed to asynchronous list blocks thread: %s", strerror(r));
+            goto fail5;
+        }
     }
 
     /* Done */
@@ -1007,7 +1013,7 @@ http_io_read_block(struct cloudbacker_store *const cb, cb_block_t block_num, voi
         const int bits_per_word = sizeof(*priv->non_zero) * 8;
         const int word = block_num / bits_per_word;
         const int bit = 1 << (block_num % bits_per_word);
-
+    
         pthread_mutex_lock(&priv->mutex);
         if ((priv->non_zero[word] & bit) == 0 && priv->non_zero_complete == HTTP_IO_BITMAP_DONE) {
             priv->stats.empty_blocks_read++;

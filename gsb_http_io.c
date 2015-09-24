@@ -30,7 +30,7 @@
 /* Authentication functions */
 static char *create_jwt_token(const char *gcs_clientId);
 static char *create_jwt_authrequest(struct http_io_private *priv );
-static int sign_p12_key(char *certFile,const char* pwd, char *plainText, char *signed_buf);
+static int sign_p12_key(const struct http_io_conf *const config, char *certFile,const char* pwd, char *plainText, char *signed_buf);
 static void replace_chars(char *jwt);
 static void http_io_gcs_auth_prepper(CURL *curl, struct http_io *io);
 
@@ -272,7 +272,7 @@ create_jwt_authrequest(struct http_io_private *priv)
 
     char signed_jwt[1024];
 
-    if((r = sign_p12_key(config->auth.u.gs.secret_keyfile,JWT_AUTH_DEFAULT_PASSWORD,jwt, signed_jwt))!= 0){
+    if((r = sign_p12_key(config, config->auth.u.gs.secret_keyfile,JWT_AUTH_DEFAULT_PASSWORD,jwt, signed_jwt))!= 0){
        return NULL;
     }
     
@@ -298,7 +298,7 @@ create_jwt_authrequest(struct http_io_private *priv)
  */
 
 static int
-sign_p12_key(char *certFile,const char* pwd, char *plainText, char *signed_buf)
+sign_p12_key(const struct http_io_conf *const config, char *certFile,const char* pwd, char *plainText, char *signed_buf)
 {
 
     unsigned char hash[SHA256_DIGEST_LENGTH];
@@ -307,13 +307,14 @@ sign_p12_key(char *certFile,const char* pwd, char *plainText, char *signed_buf)
 
     FILE* fp;
     if (!(fp = fopen(certFile, "rb"))){        
-        warnx("Error opening cert file %s\n", certFile);
+        (*config->log)(LOG_ERR, "Error opening cert file %s: %s", certFile, strerror(errno));
         goto fail;
     }
+
     PKCS12 *p12= d2i_PKCS12_fp(fp, NULL);
     fclose (fp);
     if (!p12) {
-        warnx("Error reading PKCS#12 file\n");
+        (*config->log)(LOG_ERR, "Error reading PKCS#12 file: %s", strerror(errno));
         goto fail;
     }
 
@@ -321,7 +322,7 @@ sign_p12_key(char *certFile,const char* pwd, char *plainText, char *signed_buf)
     X509 *x509=NULL;
     STACK_OF(X509) *ca = NULL;
     if (!PKCS12_parse(p12, pwd, &pkey, &x509, &ca)) {
-        warnx("Error parsing PKCS#12 file\n");
+        (*config->log)(LOG_ERR, "Error parsing PKCS#12 file: %s", strerror(errno));
         goto fail;
     }
     PKCS12_free(p12);
@@ -340,7 +341,7 @@ sign_p12_key(char *certFile,const char* pwd, char *plainText, char *signed_buf)
       
    int ret = RSA_sign(NID_sha256, hash, SHA256_DIGEST_LENGTH, sign,  &signLen, prikey);
    if(ret != 1){
-        warnx("Error:Signing p12 key with RSA Sign failed \n");
+        (*config->log)(LOG_ERR, "Signing p12 key with RSA Signature failed ");
         goto fail;
    }
    EVP_MD_CTX_destroy(ctx);
@@ -393,7 +394,6 @@ int http_io_gcs_bucket_attributes(struct cloudbacker_store *cb, void *arg)
     /* Perform operation */
     if ((r = http_io_perform_io(priv, &io, http_io_read_prepper)) != 0)
     {
-       printf("\n http_io_perform_io returned %d", r);
        goto done;
     }
 
