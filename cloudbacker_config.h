@@ -24,6 +24,7 @@
 #define CB_CONFIG_H
 
 #include "http_gio.h"
+#include "localStore_io.h"
 
 /* Overal application configuration info */
 struct cb_config {
@@ -33,7 +34,8 @@ struct cb_config {
     struct fuse_ops_conf        fuse_ops;
     struct ec_protect_conf      ec_protect;
     struct http_io_conf         http_io;
-
+    struct localStore_io_conf   localStore_io;
+ 
     /* Common/global stuff */
     const char                  *accessFile;
     const char                  *mount;

@@ -25,6 +25,7 @@
 #include "ec_protect.h"
 #include "fuse_ops.h"
 #include "cloudbacker_config.h"
+//#include "block_device.h"
 #include "gsb_http_io.h"
 #include "s3b_http_io.h"
 #include "test_io.h"
@@ -194,8 +195,15 @@ static struct cb_config config = {
 	.auth.u.gs.auth_token=          NULL,
         .auth.u.gs.accessType=          NULL, /*GSBACKER_DEFAULT_ACCESS_TYPE,*/
         .auth.u.gs.authVersion=         NULL, /*GSBACKER_DEFAULT_AUTH_VERSION,*/   	 
+    },    
+    
+    /* Local store config or Block Device config */
+    .localStore_io= {
+        .blk_device_path=               NULL,
+        .block_size=                    0,
+        .file_size=                     0, 
     },
-
+    
     /* "Eventual consistency" protection config */
     .ec_protect= {
         .min_write_delay=       CLOUDBACKER_DEFAULT_MIN_WRITE_DELAY,
@@ -481,6 +489,10 @@ static const struct fuse_opt option_list[] = {
         .value=     1
     },
     {
+        .templ=     "--localStore=%s",
+        .offset=    offsetof(struct cb_config, localStore_io.blk_device_path),        
+    },
+    {
         .templ=     "--timeout=%u",
         .offset=    offsetof(struct cb_config, http_io.timeout),
     },
@@ -557,6 +569,7 @@ struct cloudbacker_store *block_cache_store;
 struct cloudbacker_store *ec_protect_store;
 struct cloudbacker_store *http_io_store;
 struct cloudbacker_store *test_io_store;
+struct cloudbacker_store *local_io_store;
 
 /****************************************************************************
  *                      PUBLIC FUNCTION DEFINITIONS                         *
@@ -643,11 +656,22 @@ cloudbacker_create_store(struct cb_config *conf)
         if ((test_io_store = test_io_create(&conf->http_io)) == NULL)
             return NULL;
         store = test_io_store;
-    } else {
+    }else {
         if ((http_io_store = http_io_create(&conf->http_io)) == NULL)
             return NULL;
         store = http_io_store;
     }
+
+     /* create localStore_io layer if --localStore=/path/to/block/device is specified */
+     if(conf->localStore_io.blk_device_path != NULL) {
+         conf->localStore_io.file_size=conf->file_size;
+         conf->localStore_io.block_size = conf->block_size;
+         conf->localStore_io.log = conf->log;
+         conf->localStore_io.prefix = strdup(conf->http_io.prefix);
+         if((local_io_store = local_io_create(&conf->localStore_io, store, conf->fuse_ops.read_only)) == NULL)
+             goto fail_with_errno;
+         store = local_io_store;
+     }
 
     /* Create eventual consistency protection layer (if desired) */
     if (conf->ec_protect.cache_size > 0) {
@@ -662,6 +686,7 @@ cloudbacker_create_store(struct cb_config *conf)
             goto fail_with_errno;
         store = block_cache_store;
     }
+
 
     /* Set mounted flag and check previous value one last time */
     r = (*store->set_mounted)(store, &mounted, conf->fuse_ops.read_only ? -1 : 1);
@@ -701,6 +726,7 @@ static void
 cb_config_print_stats(void *prarg, printer_t *printer)
 {
     struct http_io_stats http_io_stats;
+    struct local_io_stats local_io_stats;
     struct ec_protect_stats ec_protect_stats;
     struct block_cache_stats block_cache_stats;
     double curl_reuse_ratio = 0.0;
@@ -710,6 +736,10 @@ cb_config_print_stats(void *prarg, printer_t *printer)
     /* Get HTTP stats */
     if (http_io_store != NULL)
         http_io_get_stats(http_io_store, &http_io_stats);
+
+    /* Get local io layer stats */
+    if(local_io_store != NULL)
+        local_io_get_stats(local_io_store, &local_io_stats);
 
     /* Get EC protection stats */
     if (ec_protect_store != NULL)
@@ -760,6 +790,17 @@ cb_config_print_stats(void *prarg, printer_t *printer)
         (*printer)(prarg, "%-28s %u\n", "curl_out_of_memory", http_io_stats.curl_out_of_memory);
         (*printer)(prarg, "%-28s %u\n", "curl_other_error", http_io_stats.curl_other_error);
         total_oom += http_io_stats.out_of_memory_errors;
+    }
+    if(local_io_store != NULL) {
+        (*printer)(prarg, "%-28s %u\n", "local_normal_blocks_read", local_io_stats.local_normal_blocks_read);
+        (*printer)(prarg, "%-28s %u\n", "cloud_normal_blocks_read", local_io_stats.cloud_normal_blocks_read);
+        (*printer)(prarg, "%-28s %u\n", "normal_blocks_written", local_io_stats.normal_blocks_written);
+        (*printer)(prarg, "%-28s %u\n", "local_zero_blocks_read", local_io_stats.local_zero_blocks_read);
+        (*printer)(prarg, "%-28s %u\n", "cloud_zero_blocks_read", local_io_stats.cloud_zero_blocks_read);
+        (*printer)(prarg, "%-28s %u\n", "zero_blocks_written", local_io_stats.zero_blocks_written);
+        (*printer)(prarg, "%-28s %u\n", "local_empty_blocks_read", local_io_stats.local_empty_blocks_read);
+        (*printer)(prarg, "%-28s %u\n", "cloud_empty_blocks_read", local_io_stats.cloud_empty_blocks_read);
+        (*printer)(prarg, "%-28s %u\n", "empty_blocks_written", local_io_stats.empty_blocks_written);
     }
     if (block_cache_store != NULL) {
         double read_hit_ratio = 0.0;
@@ -993,6 +1034,16 @@ validate_config(void)
         }
     }
 
+    /* Check if --localStore=/dev/blkdevice argument is specified */
+    if(config.localStore_io.blk_device_path != NULL) {
+        struct stat sb1;
+        if (!(stat(config.localStore_io.blk_device_path, &sb1) == 0 && S_ISBLK(sb1.st_mode))) {
+            warn("invalid block device '%s' is specified for localStore argument", config.localStore_io.blk_device_path);
+            return -1;
+        }
+    }
+
+
     /* Now we know storage type after parsing bucket name.
      * Initialize storage specific validation function pointers here
      */
@@ -1015,14 +1066,14 @@ validate_config(void)
     if(config.http_io.maxKeys == 0){
        warnx("invalid maxKeys value. It should be a positive integer. Using default value %u", LIST_BLOCKS_CHUNK);
        config.http_io.maxKeys = LIST_BLOCKS_CHUNK;
-    } 
-
-    /* Auto-set file mode in read_only if not explicitly set */
-    if (config.fuse_ops.file_mode == -1) {
-        config.fuse_ops.file_mode = config.fuse_ops.read_only ?
-                                    CLOUDBACKER_DEFAULT_FILE_MODE_READ_ONLY : CLOUDBACKER_DEFAULT_FILE_MODE;
     }
 
+     /* Auto-set file mode in read_only if not explicitly set */
+    if (config.fuse_ops.file_mode == -1) {
+        config.fuse_ops.file_mode = config.fuse_ops.read_only ?
+        CLOUDBACKER_DEFAULT_FILE_MODE_READ_ONLY : CLOUDBACKER_DEFAULT_FILE_MODE;
+    }
+ 
     /* Read credentials from accessFile or through command line arguments accessId and accesskey */
     /* Validation is not required if run with test flag */
     if(!config.test){
@@ -1328,12 +1379,11 @@ validate_config(void)
         config.http_io.log = config.log;
         if ((cb = http_io_create(&config.http_io)) == NULL)
             err(1, "http_io_create");
-       
+        
         r = (*cb->bucket_attributes)(cb, sClassBuf); 
         /* only for GS, storage class is bucket specific */
         if( r == 0 )
             warnx("bucket storage class is %s", config.http_io.storageClass);
-        
         if( r == 0) {
             if (!config.quiet)
                 warnx("auto-detecting file system meta data like block size, total file size etc...");
@@ -1527,6 +1577,7 @@ validate_config(void)
         config.http_io.log = config.log;
         if ((cb = http_io_create(&config.http_io)) == NULL)
             err(1, "http_io_create");
+        
         r = (*cb->set_mounted)(cb, &mounted, -1);
         (*cb->destroy)(cb);
         if (r != 0) {
@@ -1542,6 +1593,7 @@ validate_config(void)
             }
         }
     }
+
     /* Check that MD5 cache won't eventually deadlock */
     if (config.ec_protect.cache_size > 0
       && config.ec_protect.cache_time == 0
