@@ -1017,6 +1017,12 @@ validate_config(void)
        config.http_io.maxKeys = LIST_BLOCKS_CHUNK;
     } 
 
+    /* Auto-set file mode in read_only if not explicitly set */
+    if (config.fuse_ops.file_mode == -1) {
+        config.fuse_ops.file_mode = config.fuse_ops.read_only ?
+                                    CLOUDBACKER_DEFAULT_FILE_MODE_READ_ONLY : CLOUDBACKER_DEFAULT_FILE_MODE;
+    }
+
     /* Read credentials from accessFile or through command line arguments accessId and accesskey */
     /* Validation is not required if run with test flag */
     if(!config.test){
@@ -1456,8 +1462,9 @@ validate_config(void)
         if (config.file_size == 0)
             errx(1, "error: auto-detection of filesystem size %s; please specify `--size'", why);
         if (config.block_size == 0){
-            warnx("error: auto-detection of block size %s; using default block size '%s'", why,blockSizeBuf);
             config.block_size = CLOUDBACKER_DEFAULT_BLOCKSIZE;
+            unparse_size_string(blockSizeBuf, sizeof(blockSizeBuf), (uintmax_t)config.block_size);
+            warnx("error: auto-detection of block size %s; using default block size '%s'", why,blockSizeBuf);
         }
         if (!config.quiet) {
             warnx("auto-detection %s", why);
@@ -1707,12 +1714,6 @@ validate_credentials(void /*struct http_io_conf http_io*/)
             warn("Invalid path or file for accessFile argument %s", config.accessFile);
             return -1;
         } 
-    }
-
-    /* Auto-set file mode in read_only if not explicitly set */
-    if (config.fuse_ops.file_mode == -1) {
-           config.fuse_ops.file_mode = config.fuse_ops.read_only ?
-           CLOUDBACKER_DEFAULT_FILE_MODE_READ_ONLY : CLOUDBACKER_DEFAULT_FILE_MODE;
     }
 
     /* If no accessId specified, default to first in accessFile */
