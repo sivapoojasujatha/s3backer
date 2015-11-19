@@ -21,11 +21,9 @@
 
 #include "localStore_io.h"
 
-#define METADATA_BLOCK_SIZE             512
-#define METADATA_BLOCK_OFFSET           0
+#define BITS_IN_CHAR                    8
 
-//void log_func_t(int level, const char *fmt, ...) __attribute__ ((__format__ (__printf__, 2, 3)));
-//log_func_t *log;
+#define METADATA_BLOCK_OFFSET           0
 
 
 /*
@@ -38,34 +36,40 @@
 struct blk_dev_meta {
     u_int         magic;                                      /* must be first in this specific order */
     u_int         major_version, minor_version;               /* device major and minor versions */
-    size_t        size;                                       /* device size */
-    size_t        blocksize;                                  /* physical block size */
-    off_t         data_start_block_offset;                    /* offset in bytes from where data blocks are written/read from device */
+    size_t        bd_size;                                    /* device size */
+    size_t        bd_blocksize;                               /* block device physical block size */
+    off_t         data_start_byteoffset;                          /* offset in bytes from where data blocks are written/read from device */
     int           app_prefix_len;                             /* length of the prefix string */
     char          app_prefix[128];                            /* string, --prefix="xyz" */
 
     /* bit map related stuff */
-    off_t         bitmap_start_offset;                        /* offset where bitmap is stored */
+    off_t         bitmap_start_byteoffset;                        /* byte offset where bitmap is stored */
     off_t         bitmap_size;                                /* size of bitmap = no. of bytes in block device starting at bitmap_start_offset */
 
     /* block alignment stuff */
-    size_t        block_alignment;                            /* to align block device IO operations */
-    size_t        length;                                     /* to use for memalign calls */
-    off_t         data_block_offset;                          /* offset should always be block aligned */
+    size_t        alignment;                                  /* to align block device IO operations */
+    char          dummy[320];                                 /* dummy member for alignment purpose */ 
 
 } __attribute__ ((packed));                                   /* byte packed */
 
-
+/* specify byte offset or units 
+ * for block alignment may be only block_alignment is member.
+ * */
 
 typedef struct {
-    int              fd;                                      /* the file descriptor for the underlying device */
-    u_int            *local_bitmap;                           /* memory bit map updated during IO operations */ 
-    struct           blk_dev_meta metadata;
-} blk_dev_t;
+    struct blk_dev_meta    metadata;
+    u_int                  *local_bitmap;                           /* memory bit map updated during IO operations */ 
+    int                    fd;
+    log_func_t             *log;
+    size_t                 cb_blocksize;    
+    size_t                 cb_size;
+    char                   *prefix;
+    char                   *blk_dev_path;
+}blk_dev_t; 
 
 typedef blk_dev_t * blk_dev_handle_t;
 
-extern blk_dev_handle_t blk_dev_open(char *path, int flags);
+extern blk_dev_handle_t blk_dev_open(char *path, int readOnly, size_t blockSize, size_t size, char *prefix, log_func_t *log );
 
 extern int blk_dev_close(blk_dev_handle_t handle);
 

@@ -19,14 +19,13 @@
  * 02110-1301, USA.
  */
 
-//u_int magic_string = 0xC104DBAC;
 
 /* local store layer config structure */
 struct localStore_io_conf {
     u_int               block_size;
-    u_int               file_size;
+    u_int               size;
     char                *prefix; 
-    char                *blk_device_path;
+    char                *blk_dev_path;
     log_func_t          *log;
 };
 
@@ -35,17 +34,13 @@ struct local_io_stats {
 
      /* Block stats */
     u_int               local_normal_blocks_read;
-    u_int               cloud_normal_blocks_read;
-    u_int               normal_blocks_written;
+    u_int               local_normal_blocks_written;
     u_int               local_zero_blocks_read;
-    u_int               cloud_zero_blocks_read;
-    u_int               zero_blocks_written;
-    u_int               local_empty_blocks_read;    // only when nonzero_bitmap != NULL
-    u_int               cloud_empty_blocks_read;    // only when nonzero_bitmap != NULL
-    u_int               empty_blocks_written;       // only when nonzero_bitmap != NULL
+    u_int               local_zero_blocks_written;
 
 };
 
+struct local_io_private;
 
 /* localStore_io.c */
 extern struct cloudbacker_store *local_io_create(struct localStore_io_conf *config, struct cloudbacker_store *inner, int readOnly);

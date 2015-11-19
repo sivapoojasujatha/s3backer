@@ -199,9 +199,9 @@ static struct cb_config config = {
     
     /* Local store config or Block Device config */
     .localStore_io= {
-        .blk_device_path=               NULL,
+        .blk_dev_path=                  NULL,
         .block_size=                    0,
-        .file_size=                     0, 
+        .size=                          0, 
     },
     
     /* "Eventual consistency" protection config */
@@ -490,7 +490,7 @@ static const struct fuse_opt option_list[] = {
     },
     {
         .templ=     "--localStore=%s",
-        .offset=    offsetof(struct cb_config, localStore_io.blk_device_path),        
+        .offset=    offsetof(struct cb_config, localStore_io.blk_dev_path),        
     },
     {
         .templ=     "--timeout=%u",
@@ -663,8 +663,8 @@ cloudbacker_create_store(struct cb_config *conf)
     }
 
      /* create localStore_io layer if --localStore=/path/to/block/device is specified */
-     if(conf->localStore_io.blk_device_path != NULL) {
-         conf->localStore_io.file_size=conf->file_size;
+     if(conf->localStore_io.blk_dev_path != NULL) {
+         conf->localStore_io.size=conf->file_size;
          conf->localStore_io.block_size = conf->block_size;
          conf->localStore_io.log = conf->log;
          conf->localStore_io.prefix = strdup(conf->http_io.prefix);
@@ -793,14 +793,9 @@ cb_config_print_stats(void *prarg, printer_t *printer)
     }
     if(local_io_store != NULL) {
         (*printer)(prarg, "%-28s %u\n", "local_normal_blocks_read", local_io_stats.local_normal_blocks_read);
-        (*printer)(prarg, "%-28s %u\n", "cloud_normal_blocks_read", local_io_stats.cloud_normal_blocks_read);
-        (*printer)(prarg, "%-28s %u\n", "normal_blocks_written", local_io_stats.normal_blocks_written);
+        (*printer)(prarg, "%-28s %u\n", "local_normal_blocks_written", local_io_stats.local_normal_blocks_written);
         (*printer)(prarg, "%-28s %u\n", "local_zero_blocks_read", local_io_stats.local_zero_blocks_read);
-        (*printer)(prarg, "%-28s %u\n", "cloud_zero_blocks_read", local_io_stats.cloud_zero_blocks_read);
-        (*printer)(prarg, "%-28s %u\n", "zero_blocks_written", local_io_stats.zero_blocks_written);
-        (*printer)(prarg, "%-28s %u\n", "local_empty_blocks_read", local_io_stats.local_empty_blocks_read);
-        (*printer)(prarg, "%-28s %u\n", "cloud_empty_blocks_read", local_io_stats.cloud_empty_blocks_read);
-        (*printer)(prarg, "%-28s %u\n", "empty_blocks_written", local_io_stats.empty_blocks_written);
+        (*printer)(prarg, "%-28s %u\n", "local_zero_blocks_written", local_io_stats.local_zero_blocks_written);
     }
     if (block_cache_store != NULL) {
         double read_hit_ratio = 0.0;
@@ -1035,10 +1030,10 @@ validate_config(void)
     }
 
     /* Check if --localStore=/dev/blkdevice argument is specified */
-    if(config.localStore_io.blk_device_path != NULL) {
+    if(config.localStore_io.blk_dev_path != NULL) {
         struct stat sb1;
-        if (!(stat(config.localStore_io.blk_device_path, &sb1) == 0 && S_ISBLK(sb1.st_mode))) {
-            warn("invalid block device '%s' is specified for localStore argument", config.localStore_io.blk_device_path);
+        if (!(stat(config.localStore_io.blk_dev_path, &sb1) == 0 && S_ISBLK(sb1.st_mode))) {
+            warn("invalid block device '%s' is specified for localStore argument", config.localStore_io.blk_dev_path);
             return -1;
         }
     }
