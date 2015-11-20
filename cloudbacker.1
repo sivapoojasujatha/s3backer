@@ -460,6 +460,17 @@ will exit with an error unless
 is also given.
 If auto-detection fails because block number zero does not exist, and this option is not specified,
 then the default value of 4K (4096) is used.
+.It Fl \-localStore=/blk/dev/path
+Specify the local storage option. The path specified should be a valid path to block device.
+.Pp
+When 'localStore' argument is specified, all write operations will be on to the specified block device.
+.Pp
+For performing read operations, first it will verify for the data block in local storage, which is specified 
+block device. If the block exists on block device, then read will be performed from block device, else read
+operation will be performed from cloud storage or test directory(if '--test' flag is specified).
+.Pp
+IO operations on block device are block aligned.
+.Pp
 .It Fl \-cacert=FILE
 Specify SSL certificate file to be used when verifying the remote server's identity when operating over SSL connections.
 Equivalent to the

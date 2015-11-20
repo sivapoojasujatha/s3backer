@@ -1808,6 +1808,7 @@ dump_config(void)
     (*config.log)(LOG_DEBUG, "%24s: \"%s\"", "baseURL", config.http_io.baseURL);
     (*config.log)(LOG_DEBUG, "%24s: \"%s\"", "region", config.http_io.region);
     (*config.log)(LOG_DEBUG, "%24s: \"%s\"", config.test ? "testdir" : "bucket", config.http_io.bucket);
+    (*config.log)(LOG_DEBUG, "%24s: %s", "localStore", (config.localStore_io.blk_dev_path != NULL) ? config.localStore_io.blk_dev_path : "no");
     (*config.log)(LOG_DEBUG, "%24s: \"%s\"", "storageClass", config.http_io.storageClass);
     (*config.log)(LOG_DEBUG, "%24s: %u keys", "maxKeys", config.http_io.maxKeys);
     (*config.log)(LOG_DEBUG, "%24s: \"%s\"", "prefix", config.http_io.prefix);
@@ -1975,6 +1976,7 @@ usage(void)
     fprintf(stderr, "\t--%-27s %s\n", "initialRetryPause=MILLIS", "Inital retry pause after stale data or server error");
     fprintf(stderr, "\t--%-27s %s\n", "insecure", "Don't verify SSL server identity");
     fprintf(stderr, "\t--%-27s %s\n", "keyLength", "Override generated cipher key length");
+    fprintf(stderr, "\t--%-27s %s\n", "localStore=/blk/dev/path", "Enable local storage with block device path");
     fprintf(stderr, "\t--%-27s %s\n", "listBlocks", "Auto-detect non-empty blocks at startup");
     fprintf(stderr, "\t--%-27s %s\n", "listBlocksAsync", "Auto-detect non-empty blocks asynchronously");
     fprintf(stderr, "\t--%-27s %s\n", "maxDownloadSpeed=BITSPERSEC", "Max download bandwith for a single read");
