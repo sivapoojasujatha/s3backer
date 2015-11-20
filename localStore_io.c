@@ -48,8 +48,8 @@ static void local_io_destroy(struct cloudbacker_store *cb);
 static int local_io_flush(struct cloudbacker_store *const cb);
 
 /* other functions */
-static int local_io_write(struct local_io_private *const priv, u_int block_num, u_int off, u_int len, const void *src);
-static int local_io_read(struct local_io_private *const priv, cb_block_t block_num, u_int off, u_int len, void *dest);
+static int local_io_write(struct local_io_private *const priv, off_t off, size_t len, const void *src);
+static int local_io_read(struct local_io_private *const priv, off_t off, size_t len, void *dest);
 
 /*
  * Constructor
@@ -115,7 +115,11 @@ fail0:
 static int
 local_io_flush(struct cloudbacker_store *const cb)
 {
+	int rc;
     struct local_io_private *const priv = cb->data;
+
+	if ((rc = blk_dev_flush(priv->handle)))
+		return rc;
 
     return (*priv->inner->flush)(cb);
 }
@@ -158,7 +162,7 @@ local_io_set_mounted(struct cloudbacker_store *cb, int *old_valuep, int new_valu
 }
 
 static int
-local_io_write_block(struct cloudbacker_store *cb, cb_block_t block_num, const void *src, u_char *md5,check_cancel_t *check_cancel, void *arg)
+local_io_write_block(struct cloudbacker_store *cb, cb_block_t block_num, const void *src, u_char *md5, check_cancel_t *check_cancel, void *arg)
 {
     struct local_io_private *const priv = cb->data;
     struct localStore_io_conf *const config = priv->local_conf;
@@ -169,10 +173,10 @@ local_io_write_block(struct cloudbacker_store *cb, cb_block_t block_num, const v
     if (config->block_size == 0 || block_num >= num_blocks)
         return EINVAL;
 
-    /* Detect zero blocks (if not done already by upper layer) */
+    /* Will write zero blocks locally for nowm but log this */
     if (src != NULL) {
         if (local_io_is_zero_block(src, handle->cb_blocksize))
-            src = NULL;        
+            src = NULL;
     }
 
     /* Logging */
@@ -190,7 +194,7 @@ local_io_write_block(struct cloudbacker_store *cb, cb_block_t block_num, const v
      * b0 will be written at 512+(4096*0) = 512 byte offset
      * b1 will be written at 512+(4096*1) = 4608 byte offset and so on
      */
-    offset = handle->metadata.data_start_byteoffset + (priv->handle->cb_blocksize * block_num); 
+    offset = handle->meta.data.data_start_byteoffset + (priv->handle->cb_blocksize * block_num); 
 
     if (priv->handle->local_bitmap != NULL) {
         const int bits_per_word = sizeof(*priv->handle->local_bitmap) * BITS_IN_CHAR;
@@ -199,30 +203,30 @@ local_io_write_block(struct cloudbacker_store *cb, cb_block_t block_num, const v
 
         if (src == NULL) {
             priv->stats.local_zero_blocks_written++;
-            r = 0;
         }
         else{
             priv->stats.local_normal_blocks_written++;
-            r = local_io_write(priv, block_num, offset, priv->handle->cb_blocksize, src);
         }
+		r = local_io_write(priv, offset, priv->handle->cb_blocksize, src);
         priv->handle->local_bitmap[word] |= bit;
         //(*config->log)(LOG_DEBUG, "writing block: %0*jx, %s", CB_BLOCK_NUM_DIGITS, (uintmax_t)block_num, ((priv->handle->local_bitmap[word] & bit) != 0) ? "bit set":"bitnotset");
 
         pthread_mutex_unlock(&priv->mutex);
         return r;
-    }
+    } else {
+		/* Can't function without local bitmap - the read will not work */
+		r = EIO;
+	}
+
     pthread_mutex_unlock(&priv->mutex);
-    return 0;
+    return r;
 
 }
 
 static int
-local_io_write(struct local_io_private *const priv, cb_block_t block_num, u_int off, u_int len, const void *src)
+local_io_write(struct local_io_private *const priv, off_t off, size_t len, const void *src)
 {
     struct localStore_io_conf *const config = priv->local_conf;
-
-    assert(src == NULL);
-    assert(len == 0);
 
     size_t sofar;
     ssize_t r;
@@ -230,7 +234,7 @@ local_io_write(struct local_io_private *const priv, cb_block_t block_num, u_int 
     for (sofar = 0; sofar < len; sofar += r) {
         const off_t posn = off + sofar;
 
-        if ((r = blk_dev_write(((const char *)src + sofar), priv->handle, off + sofar, len - sofar)) == -1) {
+        if ((r = blk_dev_write(((const char *)src + sofar), priv->handle, off + sofar, len - sofar)) <= 0) {
             (*config->log)(LOG_ERR, "error writing block device file at offset %ju: %s", (uintmax_t)posn, strerror(r));
             goto fail;
         }
@@ -252,7 +256,7 @@ local_io_read_block(struct cloudbacker_store *const cb, cb_block_t block_num, vo
     struct local_io_private *const priv = cb->data;
     struct localStore_io_conf *const config = priv->local_conf;
     blk_dev_handle_t handle = priv->handle;
-    int num_blocks = handle->cb_size / handle->cb_blocksize;
+    int rc = 0;
 
     off_t offset = 0;
     /* offset is in bytes
@@ -260,63 +264,60 @@ local_io_read_block(struct cloudbacker_store *const cb, cb_block_t block_num, vo
      * b0 will be read at 512+(4096*0) = 512 byte offset
      * b1 will be read at 512+(4096*1) = 4608 byte offset and so on
      */
-    offset = handle->metadata.data_start_byteoffset + (priv->handle->cb_blocksize * block_num);
+    offset = handle->meta.data.data_start_byteoffset + (priv->handle->cb_blocksize * block_num);
 
     /* Sanity check */
-    if (config->block_size == 0 || block_num >= num_blocks)
+    if ((config->block_size == 0) || (offset + handle->cb_blocksize > handle->cb_size))
         return EINVAL;
 
     pthread_mutex_lock(&priv->mutex);
+ 
+    /* Logging */
+    (*config->log)(LOG_DEBUG, "reading block: %0*jx", CB_BLOCK_NUM_DIGITS, (uintmax_t)block_num);
+
     if (priv->handle->local_bitmap != NULL) {
         const int bits_per_word = (sizeof(*priv->handle->local_bitmap) * BITS_IN_CHAR);
         const int word = block_num / bits_per_word;
         const int bit = 1 << (block_num % bits_per_word);
-
-        //(*config->log)(LOG_DEBUG, "reading block: %0*jx, %s", CB_BLOCK_NUM_DIGITS, (uintmax_t)block_num, ((priv->handle->local_bitmap[word] & bit) != 0) ? "bit set":"bitnotset");
 
         /* if bit is set, then block exists in local store, else read from cloud store or test store(if --test flag is used) */
         if ((priv->handle->local_bitmap[word] & bit) != 0) {
 
             priv->stats.local_normal_blocks_read++;
             pthread_mutex_unlock(&priv->mutex);     
-            return local_io_read(priv, block_num, offset, handle->cb_blocksize, dest);
+            return local_io_read(priv, offset, handle->cb_blocksize, dest);
         }
         else {
             pthread_mutex_unlock(&priv->mutex);
             return (*priv->inner->read_block)(priv->inner, block_num, dest, actual_md5, expect_md5, strict);
         }
+    } else {
+        rc = EIO;
     }
     pthread_mutex_unlock(&priv->mutex);
-    return 0;
+    return rc;
 }
 
 /*
  * Read a block.
  */
 static int
-local_io_read(struct local_io_private *const priv, cb_block_t block_num, u_int off, u_int len, void *dest)
+local_io_read(struct local_io_private *const priv, off_t off, size_t len, void *dest)
 {
     struct localStore_io_conf *const config = priv->local_conf;
 
     pthread_mutex_lock(&priv->mutex);
 
-    assert(dest == NULL);
-
     size_t sofar;
     size_t r;
-
 
     /* perform read */
     for (sofar = 0; sofar < len; sofar += r) {
         const off_t posn = off + sofar;
 
-        if ((r = blk_dev_read(((char *)dest + sofar), priv->handle, off + sofar, len - sofar)) == -1) {
+        if ((r = blk_dev_read(((char *)dest + sofar), priv->handle, off + sofar, len - sofar)) <= 0) {
             (*config->log)(LOG_ERR, "error reading block device file at offset %ju: %s",
               (uintmax_t)posn, strerror(r));
-            goto fail;
-        }
-        if (r == 0) {
-            (*config->log)(LOG_ERR, "error reading block device file at offset %ju: file is truncated",(uintmax_t)posn);
             goto fail;
         }
     }
@@ -327,13 +328,10 @@ local_io_read(struct local_io_private *const priv, cb_block_t block_num, u_int o
         goto fail;
     }
 
-    void *tmp_buf = malloc(len*sizeof(void*));
-    memset(tmp_buf,0, len);
     /* Check is block read is zero block */
-    if (!memcmp (dest,tmp_buf , len)){
+    if(local_io_is_zero_block(dest, len)){
         priv->stats.local_zero_blocks_read++;
     }
-    free(tmp_buf);
 
     pthread_mutex_unlock(&priv->mutex);
     return 0;
@@ -369,4 +367,3 @@ local_io_is_zero_block(const void *data, u_int block_size)
     }
     return 1;
 }
-

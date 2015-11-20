@@ -26,542 +26,542 @@
 #include <linux/fs.h>
 #include <sys/ioctl.h>
 #include <malloc.h>
+#include <assert.h>
 
+#define METADATA_BLOCK_OFFSET           0
 #define MAX_PREFIX_LENGTH               128
-#define ALIGNMENT                       512
 #define DEVICE_INITIALIZED              0
 #define DEVICE_NOT_INITIALIZED          1
 #define DEVICE_CANT_BE_USED             2
 
 #define MAGIC_STRING                    0xC104DBAC
-#define MAJOR_NUMBER                    1
-#define MINOR_NUMBER                    0
+#define MAJOR_VER_NUMBER                1
+#define MINOR_VER_NUMBER                0
 
+static int blk_dev_init_meta(blk_dev_handle_t handle);
 static int blk_dev_set_config(blk_dev_handle_t handle);
 static int blk_dev_get_config(blk_dev_handle_t handle);
 static int blk_dev_validate_config(blk_dev_handle_t handle);
 static int blk_dev_read_bitmap(blk_dev_handle_t handle);
 static int blk_dev_write_bitmap(blk_dev_handle_t handle);
 
-extern blk_dev_handle_t blk_dev_open(char *path, int readOnly, size_t blockSize, size_t size, char *prefix, log_func_t *log )
+extern blk_dev_handle_t blk_dev_open(char *path, int readOnly, size_t blockSize,
+				     size_t size, char *prefix, log_func_t *log )
 {
+  int r = 0, ret = 0;
 
-    int r = 0;
+  if(path == NULL){
+    r = EINVAL;
+    goto fail0;
+  }
 
-    if(path == NULL){
-        errno = EINVAL;
-        goto fail0;
-    }
+  blk_dev_handle_t handle = NULL;
+  if((r = posix_memalign ((void *)&handle, ALIGNMENT, sizeof(blk_dev_t))) != 0){
+    err(1, "posix_memalign(): %s", strerror(r)); 
+    goto fail0;
+  }
 
-    /* stat the block device file */
-    struct stat device_Stat;
-    if(stat(path,&device_Stat) < 0)
-        goto fail0;
+  if(handle == NULL){
+    r = errno;
+    err(1, "posix_memalign(): %s", strerror(r));
+    goto fail0;
+  }
+
+  handle->cb_blocksize = blockSize;
+  handle->cb_size = size;
+  handle->prefix = strdup(prefix);
+  handle->blk_dev_path = strdup(path);
+  handle->log = log;
+
+  /* set block device access flags */
+  int flags = O_DIRECT | O_SYNC;
+  if(readOnly)
+    flags =  flags | O_RDONLY;
+  else
+    flags =  flags | O_RDWR;
+
+  handle->fd = open(path, flags);
+  if(handle->fd < 0) {
+    (*handle->log)(LOG_ERR, "bad device file descriptor"); 
+    goto fail1;
+  }
     
-    blk_dev_handle_t handle = NULL;
-    if((r = posix_memalign ((void *)&handle, ALIGNMENT, sizeof(blk_dev_t))) != 0){
-        r = errno;
-        err(1, "posix_memalign(): %s", strerror(r)); 
-        goto fail0;
+  r = blk_dev_get_config(handle);
+  if(r != 0){
+    goto fail1;
+  }
+
+  ret = blk_dev_validate_config(handle);
+  if (ret == DEVICE_INITIALIZED) {
+    /* size must be multiple of ALIGNMENT */
+    assert((handle->meta.data.bitmap_size % ALIGNMENT) == 0);
+    if((ret = posix_memalign ((void *)&(handle->local_bitmap), ALIGNMENT,
+			      handle->meta.data.bitmap_size)) != 0){
+      (*handle->log)(LOG_ERR, "aligned memory block allocation failed : %s",
+		     strerror(ret));
+      goto fail1;
+    }
+		
+    if(handle->local_bitmap == NULL){
+      r = errno;
+      (*handle->log)(LOG_ERR, "posix_memalign() failed : %s", strerror(r));
+      goto fail1;
+    }
+    /*
+     * metadata read from meta data region is valid, now read the bitmap
+     * from device into memory
+     */
+    ret = blk_dev_read_bitmap(handle);
+    if(ret != 0){
+      (*handle->log)(LOG_ERR,"blk_dev_read_bitmap() failed with error: %s",
+		     strerror(ret));
+      goto fail1;
+    }
+  }
+  else if(ret == DEVICE_NOT_INITIALIZED){
+    /* initialize metadata structure in memory */
+    ret = blk_dev_init_meta(handle);
+    if (ret) {
+      (*handle->log)(LOG_ERR,"blk_dev_init_meta() failed with error: %s",strerror(ret));
+      goto fail1;
     }
 
-    if(handle == NULL){
-        r = errno;
-        err(1, "posix_memalign(): %s", strerror(r));
-        goto fail0;
+    /* bitmap size is multiple of ALIGNMENT - calculated by */
+    assert((handle->meta.data.bitmap_size % ALIGNMENT) == 0);
+		
+    if((ret = posix_memalign ((void *)&(handle->local_bitmap), ALIGNMENT,
+			      handle->meta.data.bitmap_size)) != 0){
+      (*handle->log)(LOG_ERR, "aligned memory block allocation failed : %s",
+		     strerror(ret));
+      goto fail1;
     }
-
-    handle->cb_blocksize = blockSize;
-    handle->cb_size = size;
-    handle->prefix = strdup(prefix);
-    handle->blk_dev_path = strdup(path);
-    handle->log = log;
-
-    /* set block device access flags */
-    int flags = O_DIRECT | O_SYNC;
-    if(readOnly)
-        flags =  flags | O_RDONLY;
-    else
-        flags =  flags | O_RDWR;
-
-    handle->fd = open(path, flags);
-    if(handle->fd < 0) {
-        (*handle->log)(LOG_ERR, "invalid file handle");
-        goto fail1;
+		
+    if(handle->local_bitmap == NULL){
+      r = errno;
+      (*handle->log)(LOG_ERR, "posix_memalign() failed : %s", strerror(r));
+      goto fail1;
+    }		
+		
+    /* initially, the bitmap is all zeros */
+    memset(handle->local_bitmap, 0, handle->meta.data.bitmap_size);
+    /* write the empty bitmap to disk */
+    ret = blk_dev_write_bitmap(handle);
+    if(ret != 0){
+      (*handle->log)(LOG_ERR,"blk_dev_write_bitmap() failed with error: %s",
+		     strerror(ret));
+      goto fail1;
     }
-    
-    r = blk_dev_get_config(handle);
-    if(r != 0){
-         goto fail1;
+		
+    /* initialize metadata region after initializing the bitmap */
+    ret = blk_dev_set_config(handle);
+    if(ret != 0){
+      (*handle->log)(LOG_ERR, "failed to write meta data region to block device file: %s",strerror(ret));
+      goto fail1;
     }
-    if(handle != NULL){
+    /* the disk is fully initialized, including the bitmap and the metadata */
+  }
+  else{
+    r = EINVAL;
+    goto fail1;
+  }
 
-        int ret = blk_dev_validate_config(handle);
-        if(ret == DEVICE_INITIALIZED){
+  return handle;
 
-            size_t nwords;
-            u_int *bitmap;
-
-            int num_blocks = handle->cb_size / handle->cb_blocksize;
-            nwords = (num_blocks + (sizeof(*bitmap) * BITS_IN_CHAR) - 1) / (sizeof(*bitmap) * BITS_IN_CHAR);
-            if((ret = posix_memalign ((void *)&(handle->local_bitmap), ALIGNMENT, nwords*sizeof(*bitmap))) != 0){
-                ret = errno;
-                (*handle->log)(LOG_ERR, "aligned memory block allocation failed : %s", strerror(ret));
-                goto fail1;
-            }
-
-            if(handle->local_bitmap == NULL){
-                 r = errno;
-                 (*handle->log)(LOG_ERR, "posix_memalign() failed : %s", strerror(r));
-                 goto fail1;
-             }
-            /* metadata read from meta data region is valid, now read the bitmap from device into memory */
-            ret = blk_dev_read_bitmap(handle);
-            if(ret != 0){
-                 errno = ret;
-                (*handle->log)(LOG_ERR,"blk_dev_read_bitmap() failed with error: %s",strerror(ret));
-                goto fail1;
-            }
-        }
-        else if(ret == DEVICE_NOT_INITIALIZED){
-
-            /* initialize metadata region */
-            ret = blk_dev_set_config(handle);
-            if(ret != 0){
-                r = errno;
-                (*handle->log)(LOG_ERR, "failed to write meta data region to block device file: %s",strerror(ret));
-                goto fail1;
-            }
-
-            size_t nwords;
-            u_int *bitmap;
-			
-            int num_blocks = handle->cb_size / handle->cb_blocksize;
-            nwords = (num_blocks + (sizeof(*bitmap) * BITS_IN_CHAR) - 1) / (sizeof(*bitmap) * BITS_IN_CHAR);
-            if((ret = posix_memalign ((void *)&(handle->local_bitmap), ALIGNMENT, nwords*sizeof(*bitmap))) != 0){
-                ret = errno;
-                (*handle->log)(LOG_ERR, "aligned memory block allocation failed : %s", strerror(ret));
-                goto fail1;
-            }
-
-            if(handle->local_bitmap == NULL){
-                r = errno;
-                (*handle->log)(LOG_ERR, "posix_memalign() failed : %s", strerror(r));
-                goto fail1;
-            }
-
-            /* initialize bit map */
-            ret = blk_dev_write_bitmap(handle);
-            if(ret != 0){
-                errno = ret;
-                (*handle->log)(LOG_ERR,"blk_dev_write_bitmap() failed with error: %s",strerror(ret));
-                goto fail1;
-            }
-
-        }
-        else{
-            r = EINVAL;
-            goto fail1;
-        }
-    }
-    else{
-         errno = r;
-         goto fail1;
-    }
-
-    return handle;
-
-fail1:
-    blk_dev_close(handle); 
-fail0:
-    handle = NULL;
-    return handle;
+ fail1:
+  blk_dev_close(handle); 
+ fail0:
+  handle = NULL;
+  return handle;
 }
 
 extern int blk_dev_close(blk_dev_handle_t handle)
 {
-    if(handle != NULL){
-        blk_dev_write_bitmap(handle);
-        close(handle->fd);
+  if(handle != NULL){
+    blk_dev_write_bitmap(handle);
+    close(handle->fd);
 
-        if(handle->local_bitmap != NULL)
-            free(handle->local_bitmap);
+    if(handle->local_bitmap != NULL)
+      free(handle->local_bitmap);
 
-        free(handle);
-    }
+    free(handle);
+  }
 
-    return 0;
+  return 0;
 }
+
+extern int blk_dev_flush(blk_dev_handle_t handle)
+{
+  if(handle != NULL)
+    return (fsync(handle->fd));
+  return 0;
+}
+
 
 extern size_t blk_dev_write(const void *buf, blk_dev_handle_t handle, off_t byte_offset, size_t nbytes)
 {
-    int r = 0, errcode;
-    if(handle->fd < 0)
-        return -1;
+  int r = 0, errcode;
+  void *aligned_buf = NULL;
 
-    void *aligned_buf=NULL;
-    if((r = posix_memalign (&aligned_buf, ALIGNMENT, nbytes)) != 0){
-        r = errno;
-        (*handle->log)(LOG_ERR, "aligned memory block allocation failed : %s", strerror(r));
-        return -1;
-    }
+  /* Sanity check */
+  if (handle->fd < 0) {
+    (*handle->log)(LOG_ERR, "bad device file descriptor");
+    return -1;
+  }
+  if (byte_offset % ALIGNMENT || nbytes % ALIGNMENT) {
+    (*handle->log)(LOG_ERR, "unaligned offset %"PRIi64" or nbytes %"PRIu64"", byte_offset, nbytes);
+    return -1;
+  }
 
-    if(aligned_buf == NULL){
-        r = errno;
-        (*handle->log)(LOG_ERR, "posix_memalign() failed : %s", strerror(r));
-        return -1;
-    }
+  if((r = posix_memalign (&aligned_buf, ALIGNMENT, nbytes)) != 0){
+    r = errno;
+    (*handle->log)(LOG_ERR, "aligned memory block allocation failed : %s", strerror(r));
+    return -1;
+  }
 
-    memset(aligned_buf, 0, nbytes);
-    memcpy(aligned_buf,buf,nbytes);
+  if(aligned_buf == NULL){
+    r = errno;
+    (*handle->log)(LOG_ERR, "posix_memalign() failed : %s", strerror(r));
+    return -1;
+  }
 
-    /* write the buffer */
-    r = pwrite(handle->fd,aligned_buf, nbytes, byte_offset);
-    if(r==0){
-        errcode = r;
-        (*handle->log)(LOG_ERR, "No data written to block device file");
-        return -1;
-    }
-    if((r < 0 ) || ((r > 0) && (r != nbytes))){
-        errcode = errno;
-        (*handle->log)(LOG_ERR, "Error writing to block device file at offset %u: %s", byte_offset, strerror(errcode));
-        return -1;
-    }
+  /* need aligned buffers for direct device I/O */
+  memcpy(aligned_buf,buf,nbytes);
 
+  /* write the buffer */
+  r = pwrite(handle->fd,aligned_buf, nbytes, byte_offset);
+  if (r != nbytes) {
+    if (r < 0)
+      errcode = errno;
+    else
+      errcode = EIO;
+    (*handle->log)(LOG_ERR, "Error writing to block device file at offset %"PRIi64": %s", byte_offset, strerror(errcode));
+    r = -1;
+  }
     
-    free(aligned_buf);
-    return r;
+  free(aligned_buf);
+
+  return r;
 }
 
 extern size_t blk_dev_read(char *buf, blk_dev_handle_t handle, off_t byte_offset, size_t nbytes)
 {
-    int r = 0, errcode;
-    if(handle->fd < 0)
-        return -1;
+  int r = 0, errcode;
+  void *aligned_buf=NULL;
 
-    void *aligned_buf=NULL;
-    if((r = posix_memalign (&aligned_buf, ALIGNMENT, nbytes)) != 0){
-        r = errno;
-        (*handle->log)(LOG_ERR, "aligned memory block allocation failed : %s", strerror(r));
-        return -1;
-    }
+  /* Sanity checks */
+  if (handle->fd < 0) {
+    (*handle->log)(LOG_ERR, "bad device file descriptor");
+    return -1;
+  }
+  if (byte_offset % ALIGNMENT || nbytes % ALIGNMENT) {
+    (*handle->log)(LOG_ERR, "unaligned offset %"PRIi64" or nbytes %"PRIu64"", byte_offset, nbytes);
+    return -1;
+  }
 
-    if(aligned_buf == NULL){
-        r = errno;
-         (*handle->log)(LOG_ERR, "posix_memalign() failed : %s", strerror(r));
-        return -1;
-    }
-    memset(aligned_buf,0, nbytes);
-    /* read the buffer */
-    r = pread(handle->fd, aligned_buf, nbytes, byte_offset);
+  if((r = posix_memalign (&aligned_buf, ALIGNMENT, nbytes)) != 0){
+    r = errno;
+    (*handle->log)(LOG_ERR, "aligned memory block allocation failed : %s", strerror(r));
+    return -1;
+  }
+
+  if (aligned_buf == NULL) {
+    r = errno;
+    (*handle->log)(LOG_ERR, "posix_memalign() failed : %s", strerror(r));
+    return -1;
+  }
+
+  /* read the buffer */
+  r = pread(handle->fd, aligned_buf, nbytes, byte_offset);
    
-    memcpy(buf, aligned_buf,nbytes);
-    free(aligned_buf);
+  memcpy(buf, aligned_buf,nbytes);
+  free(aligned_buf);
 
-    if(r==0){
-        errcode = r;
-        (*handle->log)(LOG_ERR, "No data to read from block device file");
-        return -1;
-    }
-    if((r < 0 ) || ((r > 0) && (r != nbytes))){
-        errcode = errno;
-        (*handle->log)(LOG_ERR, "Error reading block device file at offset %u: %s", byte_offset, strerror(errcode));
-        return -1;
-    }
+  if (r != nbytes){
+    if (r < 0)
+      errcode = errno;
+    else
+      errcode = EIO;
+    (*handle->log)(LOG_ERR, "Error reading block device file at offset %"PRIi64": %s", byte_offset, strerror(errcode));
+    r = -1;
+  }
 
-    return r;
+  return r;
 }
 
+/*
+ * Initialize the metadata structure in memory
+ */
+static int
+blk_dev_init_meta(blk_dev_handle_t handle)
+{
+  if(handle->fd < 0) {
+    (*handle->log)(LOG_ERR, "bad device file descriptor");
+    return EINVAL;
+  }
+    
+  /* initialize metadata */
+  assert(((uint64_t)&handle->meta.data.magic % ALIGNMENT) == 0);
+  memset((void*)&(handle->meta.data.magic), 0, sizeof(handle->meta));
+
+  handle->meta.data.magic = MAGIC_STRING;
+  handle->meta.data.major_version = MAJOR_VER_NUMBER;
+  handle->meta.data.minor_version = MINOR_VER_NUMBER;
+
+  ioctl(handle->fd, BLKPBSZGET, &handle->meta.data.bd_blocksize);
+  ioctl(handle->fd, BLKGETSIZE64, &handle->meta.data.bd_size);
+
+  handle->meta.data.alignment = ALIGNMENT;
+
+  handle->meta.data.bitmap_start_byteoffset = sizeof(handle->meta); 
+  assert((handle->meta.data.bitmap_start_byteoffset % ALIGNMENT) == 0);
+
+  int num_blocks = handle->cb_size / handle->cb_blocksize;
+  /*
+   * Not all the blocks on the block device are for writing data,
+   * there is the metadata block, and the bitmap, and therefore, the actual
+   * number of bitmap bits is less than db_size/db_blocksize
+   * But we will neglect this difference and will allocate the bitmap for 
+   * all the blocks in the device regardless
+   */
+  size_t nwords =
+    (num_blocks + sizeof(*handle->local_bitmap)*BITS_IN_CHAR - 1) /
+    (sizeof(*handle->local_bitmap)*BITS_IN_CHAR - 1);
+  handle->meta.data.bitmap_size =
+    (nwords*sizeof(*handle->local_bitmap) + ALIGNMENT - 1) & ~(ALIGNMENT - 1);
+  assert((handle->meta.data.bitmap_size % ALIGNMENT) == 0);
+
+  /* calculate data offset on the block device, make sure it is aligned properly */
+  handle->meta.data.data_start_byteoffset = 
+    (METADATA_BLOCK_OFFSET + handle->meta.data.bitmap_start_byteoffset +
+     handle->meta.data.bitmap_size);
+  assert((handle->meta.data.data_start_byteoffset % ALIGNMENT) == 0);
+
+  if (strlen(handle->prefix) > MAX_PREFIX_LENGTH) {
+    (*handle->log)(LOG_ERR, "max prefix length allowed is %d", MAX_PREFIX_LENGTH);
+    return EINVAL;
+  }
+
+  handle->meta.data.app_prefix_len = strlen(handle->prefix);
+  if(handle->meta.data.app_prefix_len > 0)
+    strncpy(handle->meta.data.app_prefix, handle->prefix, strlen(handle->prefix));
+  else
+    memset(handle->meta.data.app_prefix,0,sizeof(handle->meta.data.app_prefix));
+
+  return 0;
+}
+
+/*
+ * Write the metadata section to disk
+ */
 static int
 blk_dev_set_config(blk_dev_handle_t handle)
 {
+  int r, errcode;
 
-    int r, errcode;
+  if(handle->fd < 0) {
+    (*handle->log)(LOG_ERR, "invalid file handle");
+    return EINVAL;
+  }
 
-    if(handle->fd < 0) {
-        (*handle->log)(LOG_ERR, "invalid file handle");
-        return EINVAL;
-    }
-    
-    assert(handle->blk_dev_path == NULL);
+  (*handle->log)(LOG_INFO, "write meta data region block");
+   
+  /* validate given block device before setting the configuration */
+  r = blk_dev_validate_config(handle);
+  if(r == DEVICE_CANT_BE_USED)
+    return EINVAL;
 
-    /* stat the block device file */
-    struct stat device_Stat;
-    if(stat(handle->blk_dev_path,&device_Stat) < 0)
-        return EINVAL;
-     
-     /* initialize metadata and set */
-    memset((void*)&(handle->metadata), 0, sizeof(handle->metadata));
+  /*
+   * the code assumes that metadata region is aligned at ALIGNMENT boundary,
+   * and it is a multiple of ALIGNMENT - assert this assumption
+   */
+  assert(((uint64_t)&handle->meta.data.magic % ALIGNMENT) == 0);
+  assert((sizeof(handle->meta) % ALIGNMENT) == 0);
 
-    handle->metadata.magic = MAGIC_STRING;
-    handle->metadata.major_version = (long)major(device_Stat.st_rdev);
-    handle->metadata.minor_version = (long)minor(device_Stat.st_rdev);
+  r = pwrite(handle->fd, &handle->meta.data, sizeof(handle->meta),  METADATA_BLOCK_OFFSET);
 
-    ioctl(handle->fd, BLKPBSZGET, &handle->metadata.bd_blocksize);
-    ioctl(handle->fd, BLKGETSIZE64, &handle->metadata.bd_size);
-
-    handle->metadata.alignment = ALIGNMENT;
-
-    handle->metadata.bitmap_start_byteoffset = sizeof(handle->metadata); 
-
-    int num_blocks = handle->cb_size / handle->cb_blocksize;
-    handle->metadata.bitmap_size = (num_blocks / BITS_IN_CHAR);
-
-    /* we need conf->num_blocks bits to set the bits, which is conf->num_blocks/BITS_IN_CHAR bytes */
-    off_t tmp = (METADATA_BLOCK_OFFSET + handle->metadata.bitmap_start_byteoffset + handle->metadata.bitmap_size) / ALIGNMENT;
-    handle->metadata.data_start_byteoffset = ALIGNMENT * (tmp+1); // block aligned
-
-    if(strlen(handle->prefix) > MAX_PREFIX_LENGTH){
-        (*handle->log)(LOG_ERR, "max prefix length allowed is %d", MAX_PREFIX_LENGTH);
-        return EINVAL;
-    }
-
-    handle->metadata.app_prefix_len = strlen(handle->prefix);
-    if(handle->metadata.app_prefix_len > 0)
-         strncpy(handle->metadata.app_prefix, handle->prefix, strlen(handle->prefix));
+  if (r != sizeof(handle->meta)){
+    if (r < 0)
+      errcode = errno;
     else
-         memset(handle->metadata.app_prefix,0,sizeof(handle->metadata.app_prefix));
+      errcode = EIO;
+    (*handle->log)(LOG_ERR, "failed to write meta data region block: %s",
+		   strerror(errcode));
+    return errcode;
+  }
 
-   memset(handle->metadata.dummy,0,sizeof(handle->metadata.dummy));
-    
-   (*handle->log)(LOG_INFO, "write meta data region block");
-
-    /* validate given block device before setting the configuration */
-    r = blk_dev_validate_config(handle);
-    if(r == DEVICE_CANT_BE_USED)
-       return EINVAL;
-
-    void *buf=NULL;
-    if((r = posix_memalign (&buf, ALIGNMENT, sizeof(handle->metadata))) != 0){
-        r = errno;
-        (*handle->log)(LOG_ERR, "aligned memory block allocation failed : %s", strerror(r));
-        return r;
-    }
-
-    if(buf == NULL){
-        r = errno;
-        (*handle->log)(LOG_ERR, "posix_memalign() failed : %s", strerror(r));
-        return r;
-    }
-
-   memcpy(buf,(const void*)&(handle->metadata),sizeof(handle->metadata));
-
-    /* write 512 bytes to the disk, which is meta data region or like super block at METADATA_BLOCK_OFFSET byte offset */
-    r = pwrite(handle->fd, buf, sizeof(handle->metadata),  METADATA_BLOCK_OFFSET);
-    free(buf);
-    if(r==0){
-        errcode = r;
-        (*handle->log)(LOG_ERR, "wrote %d bytes of  metadata to block device file",r);
-        return EIO;
-    }
-    if((r < 0 ) || ((r > 0) && (r != sizeof(handle->metadata)))){
-       errcode = errno;
-       (*handle->log)(LOG_ERR, "failed to write meta data region block: %s", strerror(errcode));
-       return errcode;
-    }
-    (*handle->log)(LOG_INFO, "Successfully written block device meta data region.");
-	 return 0;
+  (*handle->log)(LOG_INFO, "Successfully written block device meta data region.");
+  return 0;
 }
 
+/*
+ * Read the metadata section from disk
+ */
 static int
 blk_dev_get_config(blk_dev_handle_t handle)
 {
 
-    int r, errcode;
-    if(handle->fd < 0) {
-        (*handle->log)(LOG_ERR, "invalid file handle");
-        return EINVAL;
-    }
+  int r, errcode;
+  if(handle->fd < 0) {
+    (*handle->log)(LOG_ERR, "bad device file descriptor");
+    return EINVAL;
+  }
 
-    void *buf = NULL;
-    if((r = posix_memalign (&buf, ALIGNMENT, sizeof(handle->metadata))) != 0){
-        r = errno;
-        (*handle->log)(LOG_ERR, "aligned memory block allocation failed : %s", strerror(r));
-        return r;
-    }
+  /* The code assumes that metadata is aligned at ALIGNMENT boundary */
+  assert(((uint64_t)&handle->meta.data.magic % ALIGNMENT) == 0);
+  /* The code assumes that metadata size is a multiple of ALIGNMENT */
+  assert((sizeof(handle->meta) % ALIGNMENT) == 0);
 
-    if(buf == NULL){
-        r = errno;
-        (*handle->log)(LOG_ERR, "posix_memalign() failed : %s", strerror(r));
-        return r;
-    }
-    
-    // read meta data region or like super block
-    r = pread(handle->fd, buf, sizeof(handle->metadata),  METADATA_BLOCK_OFFSET);
-    memcpy((void*)&(handle->metadata), buf, sizeof(handle->metadata));
-    free(buf);
-    if(r==0){
-        errcode = r;
-        (*handle->log)(LOG_ERR, "No data to read in meta data region of block device file");
-        return EIO;
-    }
-    if((r < 0 ) || ((r > 0) && (r != sizeof(handle->metadata)))){
-        errcode = errno;
-        (*handle->log)(LOG_ERR, "Error reading meta data region of block device file: %s", strerror(errcode));
-        return EIO;
-    }
+  // read meta data region or like super block
+  r = pread(handle->fd, &handle->meta.data, sizeof(handle->meta),  METADATA_BLOCK_OFFSET);
 
-    (*handle->log)(LOG_INFO, "Completed reading the block device meta data region.");
-    return 0;
+  if (r != sizeof(handle->meta)){
+    if (r < 0)
+      errcode = errno;
+    else
+      errcode = EIO;
+    (*handle->log)(LOG_ERR, "Error reading meta data region of block device file: %s",
+		   strerror(errcode));
+    return EIO;
+  }
+
+  (*handle->log)(LOG_INFO, "Completed reading the block device meta data region.");
+  return 0;
 
 }
 
+/*
+ * See if the metadata section is valid and we can interpret it
+ *
+ */
 static int
 blk_dev_validate_config(blk_dev_handle_t handle)
 {
 
-    /* validate meta data read from device */
-    if( handle->metadata.magic != MAGIC_STRING) {
-        (*handle->log)(LOG_ERR, "block device meta data block magic string != application meta data magic string.");
-        return DEVICE_NOT_INITIALIZED;
-    }
+  /* validate meta data read from device */
+  if( handle->meta.data.magic != MAGIC_STRING) {
+    (*handle->log)(LOG_ERR, "block device meta data block magic string != application meta data magic string.");
+    return DEVICE_NOT_INITIALIZED;
+  }
 
-    if(handle->metadata.major_version > MAJOR_NUMBER && handle->metadata.minor_version < MINOR_NUMBER)
-        return DEVICE_CANT_BE_USED;
-    else if(handle->metadata.major_version <= MAJOR_NUMBER && handle->metadata.minor_version > MINOR_NUMBER) // may be this condition is not required
-        return DEVICE_CANT_BE_USED;
+  /* verify the metadata version */
+  if ((handle->meta.data.major_version > MAJOR_VER_NUMBER) ||
+      (handle->meta.data.major_version = MAJOR_VER_NUMBER &&
+       handle->meta.data.minor_version > MINOR_VER_NUMBER)) {
+    (*handle->log)(LOG_ERR, "block device meta data version %d.%d is higher than the known %d.%d.",
+		   handle->meta.data.major_version, handle->meta.data.minor_version,
+		   MAJOR_VER_NUMBER, MINOR_VER_NUMBER);
+    return DEVICE_CANT_BE_USED;
+  }
 
-    if(strlen(handle->metadata.app_prefix) !=  strlen(handle->prefix)){
-        (*handle->log)(LOG_ERR, "block device meta data block app prefix != config data prefix.");
-        return DEVICE_CANT_BE_USED;
-    }
-    if(strncasecmp(handle->metadata.app_prefix, handle->prefix, strlen(handle->prefix)) != 0){
-       (*handle->log)(LOG_ERR, "block device meta data block app prefix != config data prefix.");
-       return DEVICE_CANT_BE_USED;
-    }
+  if (strncmp(handle->meta.data.app_prefix, handle->prefix, strlen(handle->prefix)) != 0) {
+    (*handle->log)(LOG_ERR, "block device meta data block app prefix != config data prefix.");
+    return DEVICE_CANT_BE_USED;
+  }
 
-    if(handle->cb_blocksize < handle->metadata.bd_blocksize){
-        (*handle->log)(LOG_ERR, "block device block size is not compatible with file system block size.");
-        return DEVICE_CANT_BE_USED;
-    }
+  if (handle->cb_blocksize < handle->meta.data.bd_blocksize) {
+    (*handle->log)(LOG_ERR, "block device block size is not compatible with file system block size.");
+    return DEVICE_CANT_BE_USED;
+  }
     
-    if(handle->cb_size > handle->metadata.bd_size){
-        (*handle->log)(LOG_ERR, "block device size is not compatible with file system size.");
-        return DEVICE_CANT_BE_USED;
-    }
+  if (handle->cb_size != handle->meta.data.bd_size) {
+    (*handle->log)(LOG_ERR, "block device size %"PRIi64" is not compatible with the filesystem size %"PRIi64"",
+		   handle->meta.data.bd_size, handle->cb_size);
+    return DEVICE_CANT_BE_USED;
+  }
 
-   
-    (*handle->log)(LOG_INFO, "validation successful for meta data region.");
-    return DEVICE_INITIALIZED;
+  /*
+   * validate proper alignment of the metadata, bitmap, and the data
+   * sections on the device
+   */
+  if ((handle->meta.data.bitmap_start_byteoffset % handle->meta.data.alignment) ||
+      (handle->meta.data.bitmap_size % handle->meta.data.alignment) ||
+      (handle->meta.data.data_start_byteoffset % handle->meta.data.alignment)) {
+    (*handle->log)(LOG_INFO,
+		   "invalid disk section alignment or size: "
+		   "%"PRIi64" : %"PRIi64" : %"PRIi64"",
+		   handle->meta.data.bitmap_start_byteoffset,
+		   handle->meta.data.bitmap_size,
+		   handle->meta.data.data_start_byteoffset);
+  }
+
+  (*handle->log)(LOG_INFO, "validation successful for meta data region.");
+  return DEVICE_INITIALIZED;
 }
 
-/* write the bitmap memory to device metadata region */
+/*
+ * Write the bitmap from memory to the device bitmap region
+ */
 static int
 blk_dev_write_bitmap(blk_dev_handle_t handle)
 {
 
-    int r = 0, errcode = 0;
+  int r = 0, errcode = 0;
 
-    if(handle != NULL) {
+  if (handle == NULL) {
+    (*handle->log)(LOG_ERR, "block device handle is not valid");
+    return EINVAL;
+  }
 
-        if(handle->fd < 0) {
-            (*handle->log)(LOG_ERR, "invalid file handle");
-            return EINVAL;
-        }
-        if(handle->local_bitmap == NULL) {
-            (*handle->log)(LOG_ERR, "local_bitmap is not valid");
-            return EINVAL;
-        }
+  if(handle->fd < 0) {
+    (*handle->log)(LOG_ERR, "invalid file handle");
+    return EINVAL;
+  }
+  if(handle->local_bitmap == NULL) {
+    (*handle->log)(LOG_ERR, "local_bitmap is not valid");
+    return EINVAL;
+  }
 
-        void *buf=NULL;
-        u_int *bitmap;
-        int num_blocks =  handle->cb_size / handle->cb_blocksize;
-        size_t nwords = (num_blocks + (sizeof(*bitmap) * BITS_IN_CHAR) - 1) / (sizeof(*bitmap) * BITS_IN_CHAR);
+  assert(((uint64_t)handle->local_bitmap % ALIGNMENT) == 0);
+  assert((handle->meta.data.bitmap_size % ALIGNMENT) == 0);
+	
+  r = pwrite(handle->fd, handle->local_bitmap, handle->meta.data.bitmap_size,
+	     handle->meta.data.bitmap_start_byteoffset);
 
-        size_t tmp = (nwords*sizeof(*bitmap)) / ALIGNMENT;
-        size_t size = ALIGNMENT + (tmp*ALIGNMENT);  // size bytes will be allocated
-         
-        if((r = posix_memalign (&buf, ALIGNMENT, size)) != 0){
-            r = errno;
-            (*handle->log)(LOG_ERR, "aligned memory block allocation failed : %s", strerror(r));
-            return r;
-        }
-
-        if(buf == NULL){
-            r = errno;
-            (*handle->log)(LOG_ERR, "posix_memalign() failed : %s", strerror(r));
-            return r; 
-        }
-
-        memset(buf,0, size);
-
-        cb_block_t block = 0;
-        for(block=0; block< num_blocks; block++){
-	    const int bits_per_word = sizeof(*handle->local_bitmap) * BITS_IN_CHAR;
-	    const int word = block / bits_per_word;
-	    memcpy(((char*)buf) + sizeof(*handle->local_bitmap),(const void*)&(handle->local_bitmap[word]),sizeof(*handle->local_bitmap));
-            //(*handle->log)(LOG_DEBUG," write (handle->local_bitmap[word]): %0*jx, %u", CB_BLOCK_NUM_DIGITS, (uintmax_t)block, (handle->local_bitmap[word]));
-        }
-
-        r = pwrite(handle->fd, buf, size, handle->metadata.bitmap_start_byteoffset);
-        free(buf);
-        if((r == 0) || (r < 0 ) || ((r > 0) && (r != size))){
-            errcode = errno;
-           (*handle->log)(LOG_ERR, "failed to write bitmap to block device: %s", strerror(errcode));
-           return errcode;
-        }
+  if (r != handle->meta.data.bitmap_size) {
+    if (r < 0)
+      errcode = errno;
+    else
+      errcode = EIO;
+    (*handle->log)(LOG_ERR, "failed to write bitmap to block device: %s", strerror(errcode));
+    return errcode;
+  }
         
-        (*handle->log)(LOG_INFO, "Successfully written bitmap to block device.");
-    }
-    return 0;
+  (*handle->log)(LOG_INFO, "Successfully written bitmap to block device.");
+
+  return 0;
 }
 
-/* read the bitmap from device metadata region into memory */
+/*
+ * Read the bitmap from device bitmap region into memory
+ */
 static int
 blk_dev_read_bitmap( blk_dev_handle_t handle)
 {
 
-    int r = 0, errcode = 0;
-
-    if(handle != NULL) {
+  int r = 0, errcode = 0;
+  
+  if (handle == NULL) {
+    (*handle->log)(LOG_ERR, "block device handle is not valid");
+    return EINVAL;
+  }
      
-        if(handle->fd < 0) {
-            (*handle->log)(LOG_ERR, "invalid file handle");
-            return EINVAL;
-        }
+  if (handle->fd < 0) {
+    (*handle->log)(LOG_ERR, "invalid file handle");
+    return EINVAL;
+  }
+	
+  r = pread(handle->fd, &handle->local_bitmap[0], handle->meta.data.bitmap_size,
+	    handle->meta.data.bitmap_start_byteoffset);
+  if (r != handle->meta.data.bitmap_size) {
+    if (r < 0)
+      errcode = errno;
+    else
+      errcode = EIO;
+    (*handle->log)(LOG_ERR, "failed to read bitmap from block device: %s", strerror(errcode));
+    return errcode;
+  }
 
-        void *buf=NULL;
-        u_int *bitmap;
-        int num_blocks =  handle->cb_size / handle->cb_blocksize;
-        size_t nwords = (num_blocks + (sizeof(*bitmap) * BITS_IN_CHAR) - 1) / (sizeof(*bitmap) * BITS_IN_CHAR);
+  (*handle->log)(LOG_INFO, "Successfully read bitmap from block device.");
 
-        size_t tmp = (nwords*sizeof(*bitmap)) / ALIGNMENT;
-        size_t size = ALIGNMENT + (tmp*ALIGNMENT);  // size bytes will be allocated
-
-        if((r = posix_memalign (&buf, ALIGNMENT, size)) != 0){
-            r = errno;
-            (*handle->log)(LOG_ERR, "aligned memory block allocation failed : %s", strerror(r));
-            return r;
-        }
-
-        if(buf == NULL){
-            r = errno;
-            (*handle->log)(LOG_ERR, "posix_memalign() failed : %s", strerror(r));
-            return r;
-        }
-        memset(buf,0, size);
-        r = pread(handle->fd, buf, size,  handle->metadata.bitmap_start_byteoffset);
-        if((r == 0) || (r < 0 ) || ((r > 0) && (r != size))){
-           errcode = errno;
-           (*handle->log)(LOG_ERR, "failed to read bitmap from block device: %s", strerror(errcode));
-           free(buf);
-           return errcode;
-        }
-
-        cb_block_t block = 0;
-        for(block=0; block< num_blocks; block++){
-            const int bits_per_word = sizeof(*handle->local_bitmap) * BITS_IN_CHAR;
-            const int word = block / bits_per_word;
-            memcpy((void*)&(handle->local_bitmap[word]), ((char*)buf) + sizeof(*handle->local_bitmap), sizeof(*handle->local_bitmap));
-            // (*handle->log)(LOG_DEBUG," read (handle->local_bitmap[word]): %0*jx, %u", CB_BLOCK_NUM_DIGITS, (uintmax_t)block, (handle->local_bitmap[word]));
-
-        }
-        free(buf);
-        (*handle->log)(LOG_INFO, "Successfully read bitmap from block device.");
-
-     }
-     return 0;
+  return 0;
 }
-
-
-

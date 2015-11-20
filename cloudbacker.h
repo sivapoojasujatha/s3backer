@@ -86,7 +86,7 @@
 /*
  * Integral type for holding a block number.
  */
-typedef uint32_t    cb_block_t;
+typedef uint64_t    cb_block_t;
 
 /*
  * How many hex digits we will use to print a block number.

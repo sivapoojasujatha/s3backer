@@ -19,11 +19,12 @@
  * 02110-1301, USA.
  */
 
+#include <inttypes.h>
 
 /* local store layer config structure */
 struct localStore_io_conf {
     u_int               block_size;
-    u_int               size;
+    uint64_t            size;
     char                *prefix; 
     char                *blk_dev_path;
     log_func_t          *log;
