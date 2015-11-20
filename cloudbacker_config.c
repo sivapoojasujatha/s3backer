@@ -200,7 +200,7 @@ static struct cb_config config = {
     /* Local store config or Block Device config */
     .localStore_io= {
         .blk_dev_path=                  NULL,
-        .block_size=                    0,
+        .blocksize=                     0,
         .size=                          0, 
     },
     
@@ -665,10 +665,11 @@ cloudbacker_create_store(struct cb_config *conf)
      /* create localStore_io layer if --localStore=/path/to/block/device is specified */
      if(conf->localStore_io.blk_dev_path != NULL) {
          conf->localStore_io.size=conf->file_size;
-         conf->localStore_io.block_size = conf->block_size;
+         conf->localStore_io.blocksize = conf->block_size;
          conf->localStore_io.log = conf->log;
          conf->localStore_io.prefix = strdup(conf->http_io.prefix);
-         if((local_io_store = local_io_create(&conf->localStore_io, store, conf->fuse_ops.read_only)) == NULL)
+         conf->localStore_io.readOnly =  conf->fuse_ops.read_only; 
+         if((local_io_store = local_io_create(&conf->localStore_io, store)) == NULL)
              goto fail_with_errno;
          store = local_io_store;
      }
@@ -700,6 +701,17 @@ cloudbacker_create_store(struct cb_config *conf)
             r = EBUSY;
             goto fail;
         }
+    }
+
+    /*
+     * initialize block device, only if http store is mounted
+     */
+    if(!mounted) {     // not mounted by other process 
+        r = (*store->init)(store, mounted);
+        if (r != 0) {
+            (*conf->log)(LOG_ERR, "error initializing block device : %s ", strerror(r));
+            goto fail;
+       }
     }
 
     /* Done */

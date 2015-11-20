@@ -175,6 +175,12 @@ struct cloudbacker_store {
     int         (*set_meta_data)(struct cloudbacker_store *cb, int operation);
 
     /*
+     * Initialize block device for IO operations
+     * Only if http store or test store is mounted, local IO store should be initialized.
+     * Helps in preventing concurrent access to the specified block device from multiple processes.
+     */   
+    int         (*init)(struct cloudbacker_store *cb, int mounted);
+    /*
      * Write one block.
      *
      * Passing src == NULL is equivalent to passing a block containing all zeroes.

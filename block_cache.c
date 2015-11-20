@@ -179,6 +179,7 @@ static int block_cache_write_block_part(struct cloudbacker_store *cb, cb_block_t
 static int block_cache_list_blocks(struct cloudbacker_store *cb, block_list_func_t *callback, void *arg);
 static int block_cache_flush(struct cloudbacker_store *cb);
 static void block_cache_destroy(struct cloudbacker_store *cb);
+static int block_cache_init(struct cloudbacker_store *cb,int mounted);
 
 /* Other functions */
 static cb_dcache_visit_t block_cache_dcache_load;
@@ -234,6 +235,7 @@ block_cache_create(struct block_cache_conf *config, struct cloudbacker_store *in
     cb->set_mounted = block_cache_set_mounted;
     cb->read_block = block_cache_read_block;
     cb->set_meta_data = block_cache_set_meta_data;
+    cb->init = block_cache_init;
     cb->write_block = block_cache_write_block;
     cb->read_block_part = block_cache_read_block_part;
     cb->write_block_part = block_cache_write_block_part;
@@ -717,6 +719,14 @@ block_cache_set_meta_data(struct cloudbacker_store *cb, int operation)
     struct block_cache_private *const priv = cb->data;
 
     return (*priv->inner->set_meta_data)(priv->inner, operation);
+}
+
+static int 
+block_cache_init(struct cloudbacker_store *cb,int mounted)
+{
+    struct block_cache_private *const priv = cb->data;
+
+    return (*priv->inner->init)(priv->inner, mounted);
 }
 
 static int

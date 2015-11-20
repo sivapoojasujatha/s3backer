@@ -40,7 +40,7 @@ static int http_io_write_block_part(struct cloudbacker_store *cb, cb_block_t blo
 static int http_io_list_blocks(struct cloudbacker_store *cb, block_list_func_t *callback, void *arg);
 static int http_io_flush(struct cloudbacker_store *cb);
 static void http_io_destroy(struct cloudbacker_store *cb);
-
+static int http_io_set(struct cloudbacker_store *cb, int mounted);
 /* Misc */
 static void http_io_openssl_locker(int mode, int i, const char *file, int line);
 static u_long http_io_openssl_ider(void);
@@ -174,7 +174,8 @@ http_io_create(struct http_io_conf *config)
     cb->list_blocks = http_io_list_blocks;
     cb->flush = http_io_flush;
     cb->destroy = http_io_destroy;
-    
+    cb->init = http_io_set;
+
     /* initialize storage specific function pointers */
     if(config->storage_prefix == GS_STORAGE){
     
@@ -412,6 +413,12 @@ http_io_destroy(struct cloudbacker_store *const cb)
 
 static int
 http_io_flush(struct cloudbacker_store *const cb)
+{
+    return 0;
+}
+
+static int
+http_io_set(struct cloudbacker_store *cb, int mounted)
 {
     return 0;
 }

@@ -21,12 +21,14 @@
 
 #include <inttypes.h>
 
+
 /* local store layer config structure */
 struct localStore_io_conf {
-    u_int               block_size;
+    u_int               blocksize;
     uint64_t            size;
     char                *prefix; 
     char                *blk_dev_path;
+    int                 readOnly;
     log_func_t          *log;
 };
 
@@ -41,9 +43,19 @@ struct local_io_stats {
 
 };
 
-struct local_io_private;
+/* Internal state */
+struct local_io_private {
+
+    struct localStore_io_conf      *local_conf;                    /* local_io_store configuration structure */
+    struct local_io_stats          stats;                          /* local_io_store statistics */    
+    struct cloudbacker_store       *inner;
+    struct blk_dev_t               *handle;                        /* block device handle */  
+    u_int                          *bitmap;                        /* memory bit map updated during local store IO operations */
+    pthread_mutex_t                mutex;
+};
+
 
 /* localStore_io.c */
-extern struct cloudbacker_store *local_io_create(struct localStore_io_conf *config, struct cloudbacker_store *inner, int readOnly);
+extern struct cloudbacker_store *local_io_create(struct localStore_io_conf *config, struct cloudbacker_store *inner);
 extern void local_io_get_stats(struct cloudbacker_store *cb, struct local_io_stats *stats);
 
