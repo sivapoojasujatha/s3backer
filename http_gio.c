@@ -25,7 +25,6 @@
 #include "http_gio.h"
 #include "gsb_http_io.h"
 #include "s3b_http_io.h"
-//#include <stdlib.h>
 
 /* cloudbacker_store functions */
 static int http_io_meta_data(struct cloudbacker_store *cb);
@@ -463,7 +462,7 @@ http_io_add_date(struct http_io_private *const priv, struct http_io *const io, t
  */
 static cb_block_t bit_reverse(cb_block_t block_num)
 {
-    int nbits = sizeof(cb_block_t) * 8;
+  /*  int nbits = sizeof(cb_block_t) * 8;
     cb_block_t reversed_block_num = (cb_block_t)0;
     int b, ib;
 
@@ -472,6 +471,19 @@ static cb_block_t bit_reverse(cb_block_t block_num)
     for (b = nbits - 1, ib = 0; b >= 0; b--, ib++) {
         unsigned char bit = (block_num & (1 << b)) >> b;
         reversed_block_num |= bit << ib;
+    }
+
+    return reversed_block_num;
+  */
+
+    int nbits = sizeof(cb_block_t) * 8;
+    cb_block_t mask = ~UINT64_C(0);
+
+    if (block_num == 0) return block_num;
+    cb_block_t reversed_block_num = block_num;
+    while ((nbits >>= 1) > 0) {
+       mask ^= (mask << nbits);
+       reversed_block_num = ((reversed_block_num >> nbits) & mask) | ((reversed_block_num << nbits) & ~mask);
     }
 
     return reversed_block_num;
