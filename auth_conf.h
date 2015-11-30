@@ -62,7 +62,7 @@ typedef struct http_io_parameters{
     char encryption_cipher_header[40];
     u_int block_size_headerval;
     char HMAC_Header[32];
-    char HMAC_Headerval[32];
+    char HMAC_Headerval[64];
     char name_hash_header[32];
     char acl_header[32];
     char acl_headerval[64];

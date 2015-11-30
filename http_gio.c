@@ -749,12 +749,18 @@ void etag_parser(char *buf, struct http_io *io)
 
 void hmac_parser(char *buf, struct http_io *io)
 {
+    /* format
+     * for google = x-goog-meta-gsbacker-hmac: "902567690994685ad70b8d5db08bfdca3ad6b711"
+     * for s3 = x-amz-meta-s3backer-hmac: "fcbe7689946ea54793f76a25ad451b7904748a91"
+     */
+
     char fmtbuf[64];
-    if (strncasecmp(buf, S3B_HMAC_HEADER ":", sizeof(S3B_HMAC_HEADER)) == 0) {
+    char delim[] = ": ";
+    if(strncasecmp(buf, io->config->http_io_params->HMAC_Header, strlen(io->config->http_io_params->HMAC_Header)) == 0) {
         char hmacbuf[SHA_DIGEST_LENGTH * 2 + 1];
 
         snprintf(fmtbuf, sizeof(fmtbuf), " \"%%%uc\"", SHA_DIGEST_LENGTH * 2);
-        if (sscanf(buf + sizeof(S3B_HMAC_HEADER), fmtbuf, hmacbuf) == 1)
+        if (sscanf(buf + strlen(io->config->http_io_params->HMAC_Header)+strlen(delim), fmtbuf, hmacbuf) == 1)
             http_io_parse_hex(hmacbuf, io->hmac, SHA_DIGEST_LENGTH);
     }
 }
