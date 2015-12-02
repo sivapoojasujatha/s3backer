@@ -1166,7 +1166,7 @@ validate_config(void)
         warnx("illegal filename `%s'", config.fuse_ops.filename);
         return -1;
     }
-    if (strchr(config.fuse_ops.stats_filename, '/') != NULL) {
+    if (strchr(config.fuse_ops.stats_filename, '/') != NULL || *config.fuse_ops.stats_filename == '\0') {
         warnx("illegal stats filename `%s'", config.fuse_ops.stats_filename);
         return -1;
     }
@@ -1357,6 +1357,31 @@ validate_config(void)
           config.http_io.baseURL, config.http_io.bucket, config.http_io.prefix);
     }
 
+    /* Check computed block and file sizes */
+    if(config.block_size != 0 && config.file_size != 0){
+        if (config.block_size != (1 << (ffs(config.block_size) - 1))) {
+            warnx("block size must be a power of 2");
+            return -1;
+        }    
+        if (config.file_size % config.block_size != 0) {
+            warnx("file size must be a multiple of block size");
+            return -1;
+        }
+        config.num_blocks = config.file_size / config.block_size;
+        if (sizeof(cb_block_t) < sizeof(config.num_blocks)
+            && config.num_blocks > ((off_t)1 << (sizeof(cb_block_t) * 8))) {
+            warnx("more than 2^%d blocks: decrease file size or increase block size", (int)(sizeof(cb_block_t) * 8));
+            return -1;
+        }
+
+        /* Check block size vs. encryption block size */
+        if (config.http_io.encryption != NULL && config.block_size % EVP_MAX_IV_LENGTH != 0) {
+            warnx("block size must be at least %u when encryption is enabled", EVP_MAX_IV_LENGTH);
+            return -1;
+        }
+    }
+
+
     /* set http IO meta data parameters */
     config.http_io.http_metadata.block_size = config.block_size;
     config.http_io.http_metadata.file_size = config.file_size;
@@ -1444,66 +1469,61 @@ validate_config(void)
             } else
                 errx(1, "error: configured file size %s != filesystem file size %s", buf,fileSizeBuf);
         }
-        /* Can skip further validation for erase and reset flags */
-        if(!config.erase && !config.reset) {
-            /* compare name hash setting */
-            if (config.http_io.name_hash == 0)
-                config.http_io.name_hash = config.http_io.http_metadata.name_hash;
-            else if (config.http_io.http_metadata.name_hash != config.http_io.name_hash) {
-
-                if (config.force) {
-                    if (!config.quiet) {
-                        warnx("warning: configured name hashing setting '%s' != filesystem name hashing "
-			      "setting '%s',\nbut you said `--force' so I'll proceed anyway even though "
-			      "your object names will probably not be interpreted correctly.",
-			      config.http_io.name_hash ? "yes" : "no",
-			      config.http_io.http_metadata.name_hash ? "yes" : "no");
-                    }
-                } else
-                    errx(1, "error: configured name hashing setting '%s' != filesystem name hashing setting '%s'",
-		    config.http_io.name_hash ? "yes" : "no",
-		    config.http_io.http_metadata.name_hash ? "yes" : "no");
-            }
-            /* compare compression flag */
-            if (config.http_io.compress == Z_NO_COMPRESSION)
-                config.http_io.compress = config.http_io.http_metadata.compression_level;
-            else if (config.http_io.http_metadata.compression_level != config.http_io.compress) {
- 
-                if (config.force) {
-                    if (!config.quiet) {
-                        warnx("warning: configured compression setting '%u' != filesystem compression setting "
-                              "setting '%u',\nbut you said `--force' so I'll proceed anyway even though "
-                              "your object names will probably not be interpreted correctly.",
-                              config.http_io.compress, config.http_io.http_metadata.compression_level);
-                    }                 
-                } else
-                    errx(1, "error: configured compression setting level='%d'%s != filesystem compression level='%d'%s ", config.http_io.compress, 
-                         config.http_io.compress == Z_DEFAULT_COMPRESSION ? "(default)" : "", config.http_io.http_metadata.compression_level,
-                         config.http_io.http_metadata.compression_level == Z_DEFAULT_COMPRESSION ? "(default)" : "");
-            }
-            /* compare encryption cipher flag */
-            if (config.http_io.encryption == NULL && config.http_io.http_metadata.is_encrypted) {
-                config.encrypt= config.http_io.http_metadata.is_encrypted;
-                config.http_io.encryption = strdup(config.http_io.http_metadata.encryption_cipher);
-                if( config.http_io.password == NULL)
-                   errx(1, "encryption password cannot be empty as file system is encrypted,\nplease specify '--encrypt' flag and provide encryption passsword using respective flag or when prompted");
-            } 
-            else if(config.http_io.http_metadata.is_encrypted) {
-                if( strcmp(config.http_io.http_metadata.encryption_cipher, config.http_io.encryption) != 0){     
-            
-                    if (config.force) {
-                        if (!config.quiet) {
-                            warnx("warning: configured encryption cipher '%s' != filesystem encryption cipher "
-                                  "setting '%s',\nbut you said `--force' so I'll proceed anyway even though "
-                                  "your object names will probably not be interpreted correctly.",
-                                  config.http_io.encryption == NULL ? "(none)" : config.http_io.encryption ,
-                                  config.http_io.http_metadata.encryption_cipher == NULL ? "(none)" : config.http_io.http_metadata.encryption_cipher);
-                        } 
-                    } else
-                         errx(1, "error: configured encryption cipher '%s' != filesystem encryption cipher '%s' ",
-                         config.http_io.encryption == NULL ? "(none)" : config.http_io.encryption ,
-                         config.http_io.http_metadata.encryption_cipher == NULL ? "(none)" : config.http_io.http_metadata.encryption_cipher);
+        /* compare name hash setting */
+        if (config.http_io.name_hash == 0)
+            config.http_io.name_hash = config.http_io.http_metadata.name_hash;
+        else if (config.http_io.http_metadata.name_hash != config.http_io.name_hash) {
+            if (config.force) {
+                if (!config.quiet) {
+                    warnx("warning: configured name hashing setting '%s' != filesystem name hashing "
+                          "setting '%s',\nbut you said `--force' so I'll proceed anyway even though "
+		          "your object names will probably not be interpreted correctly.",
+		          config.http_io.name_hash ? "yes" : "no",
+		          config.http_io.http_metadata.name_hash ? "yes" : "no");
                 }
+            } else {
+                errx(1, "error: configured name hashing setting '%s' != filesystem name hashing setting '%s'",
+	                config.http_io.name_hash ? "yes" : "no", config.http_io.http_metadata.name_hash ? "yes" : "no");
+            }
+        }
+        /* compare compression flag */
+        if (config.http_io.compress == Z_NO_COMPRESSION)
+            config.http_io.compress = config.http_io.http_metadata.compression_level;
+        else if (config.http_io.http_metadata.compression_level != config.http_io.compress) {
+            if (config.force) {
+                if (!config.quiet) {
+                    warnx("warning: configured compression setting '%u' != filesystem compression setting "
+                          "setting '%u',\nbut you said `--force' so I'll proceed anyway even though "
+                          "your object names will probably not be interpreted correctly.",
+                          config.http_io.compress, config.http_io.http_metadata.compression_level);
+                }                 
+            } else
+                errx(1, "error: configured compression setting level='%d'%s != filesystem compression level='%d'%s ", config.http_io.compress, 
+                        config.http_io.compress == Z_DEFAULT_COMPRESSION ? "(default)" : "", config.http_io.http_metadata.compression_level,
+                        config.http_io.http_metadata.compression_level == Z_DEFAULT_COMPRESSION ? "(default)" : "");
+       }
+       /* compare encryption cipher flag */
+       if (config.http_io.encryption == NULL && config.http_io.http_metadata.is_encrypted) {
+            config.encrypt= config.http_io.http_metadata.is_encrypted;
+            config.http_io.encryption = strdup(config.http_io.http_metadata.encryption_cipher);
+            if( config.http_io.password == NULL)
+                errx(1, "encryption password cannot be empty as file system is encrypted,\nplease specify '--encrypt' flag and provide encryption passsword using respective flag or when prompted");
+        } 
+        else if(config.http_io.http_metadata.is_encrypted) {
+            if( strcmp(config.http_io.http_metadata.encryption_cipher, config.http_io.encryption) != 0){     
+        
+                if (config.force) {
+                    if (!config.quiet) {
+                        warnx("warning: configured encryption cipher '%s' != filesystem encryption cipher "
+                              "setting '%s',\nbut you said `--force' so I'll proceed anyway even though "
+                              "your object names will probably not be interpreted correctly.",
+                              config.http_io.encryption == NULL ? "(none)" : config.http_io.encryption ,
+                              config.http_io.http_metadata.encryption_cipher == NULL ? "(none)" : config.http_io.http_metadata.encryption_cipher);
+                    } 
+                } else
+                     errx(1, "error: configured encryption cipher '%s' != filesystem encryption cipher '%s' ",
+                     config.http_io.encryption == NULL ? "(none)" : config.http_io.encryption ,
+                     config.http_io.http_metadata.encryption_cipher == NULL ? "(none)" : config.http_io.http_metadata.encryption_cipher);
             }
         }
         break;
@@ -1531,6 +1551,7 @@ validate_config(void)
                   config.http_io.compress, config.http_io.compress == Z_DEFAULT_COMPRESSION ? "(default)" : "");
         }
 
+
         /* write a zero data block with configured meta data, later can be used for auto detection */ 
         if (!config.no_auto_detect) {
             r = (*cb->set_meta_data)(cb, 1 /* PUT operation */);
@@ -1553,7 +1574,6 @@ validate_config(void)
     if (!config.no_auto_detect)
         (*cb->destroy)(cb);
 
-    /* Check computed block and file sizes */
     if (config.block_size != (1 << (ffs(config.block_size) - 1))) {
         warnx("block size must be a power of 2");
         return -1;
@@ -1564,16 +1584,11 @@ validate_config(void)
     }
     config.num_blocks = config.file_size / config.block_size;
     if (sizeof(cb_block_t) < sizeof(config.num_blocks)
-      && config.num_blocks > ((off_t)1 << (sizeof(cb_block_t) * 8))) {
+        && config.num_blocks > ((off_t)1 << (sizeof(cb_block_t) * 8))) {
         warnx("more than 2^%d blocks: decrease file size or increase block size", (int)(sizeof(cb_block_t) * 8));
         return -1;
     }
 
-    /* Check block size vs. encryption block size */
-    if (config.http_io.encryption != NULL && config.block_size % EVP_MAX_IV_LENGTH != 0) {
-        warnx("block size must be at least %u when encryption is enabled", EVP_MAX_IV_LENGTH);
-        return -1;
-    }
 
     /* Check whether already mounted */
     if (!config.test && !config.erase && !config.reset) {
