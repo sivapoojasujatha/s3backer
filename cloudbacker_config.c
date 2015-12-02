@@ -706,12 +706,11 @@ cloudbacker_create_store(struct cb_config *conf)
     /*
      * initialize block device, only if http store is mounted
      */
-    if(!mounted) {     // not mounted by other process 
+    if((!mounted) && (conf->localStore_io.blk_dev_path != NULL)) {     // not mounted by other process 
         r = (*store->init)(store, mounted);
         if (r != 0) {
             (*conf->log)(LOG_ERR, "error initializing block device : %s ", strerror(r));
-            goto fail;
-       }
+        }
     }
 
     /* Done */
@@ -1044,9 +1043,11 @@ validate_config(void)
     /* Check if --localStore=/dev/blkdevice argument is specified */
     if(config.localStore_io.blk_dev_path != NULL) {
         struct stat sb1;
-        if (!(stat(config.localStore_io.blk_dev_path, &sb1) == 0 && S_ISBLK(sb1.st_mode))) {
-            warn("invalid block device '%s' is specified for localStore argument", config.localStore_io.blk_dev_path);
-            return -1;
+        int retcode = stat(config.localStore_io.blk_dev_path, &sb1);
+        if((retcode != 0) || ((retcode == 0) && (!S_ISBLK(sb1.st_mode)))) {
+            warnx("invalid block device path '%s' or is not a block device %s", 
+                   config.localStore_io.blk_dev_path, (retcode != 0) ? strerror(errno) : "");
+            return -1;    
         }
     }
 
@@ -1612,6 +1613,32 @@ validate_config(void)
             if (!config.quiet) {
                 warnx("warning: filesystem appears already mounted but you said `--force'\n"
                   " so I'll proceed anyway even though your data may get corrupted.\n");
+            }
+        }        
+        
+        if (!config.erase && !config.reset) {
+
+             /* create localStore_io layer if --localStore=/path/to/block/device is specified */
+            if(config.localStore_io.blk_dev_path != NULL) {
+                config.localStore_io.size=config.file_size;
+                config.localStore_io.blocksize = config.block_size;
+                config.localStore_io.log = config.log;
+                config.localStore_io.prefix = strdup(config.http_io.prefix);
+                config.localStore_io.readOnly =  config.fuse_ops.read_only;
+                if((cb = local_io_create(&config.localStore_io, NULL)) == NULL)
+                    err(1, "local_io_create");
+            }
+
+            /* check if device can be used */
+            if((!mounted) && (config.localStore_io.blk_dev_path != NULL)) {
+                r = (*cb->init)(cb, mounted);
+                (*cb->destroy)(cb);
+                if (r != 0) {
+                   errno=r; 
+                   warnx("warning: initializing block device : %s ", strerror(r));
+                }
+                if(config.localStore_io.block_device_status == BLK_DEV_CANNOT_BE_USED)
+                    errx(1, "error: block device %s cannot be used", config.localStore_io.blk_dev_path);
             }
         }
     }

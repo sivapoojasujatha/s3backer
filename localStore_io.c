@@ -107,11 +107,13 @@ local_io_init(struct cloudbacker_store *cb, int mounted)
     if(priv->handle != NULL)
        return -1;
     pthread_mutex_lock(&priv->mutex);
+    config->block_device_status = BLK_DEV_CANNOT_BE_USED;
     priv->handle = blk_dev_open(priv, config->blk_dev_path, config->readOnly, config->blocksize, config->size, config->prefix, config->log );
     if( priv->handle == NULL){
         pthread_mutex_unlock(&priv->mutex);
         return EINVAL;
     }
+    config->block_device_status = BLK_DEV_CAN_BE_USED;
     pthread_mutex_unlock(&priv->mutex);
     return 0;
 }
@@ -119,11 +121,11 @@ local_io_init(struct cloudbacker_store *cb, int mounted)
 static int
 local_io_flush(struct cloudbacker_store *const cb)
 {
-	int rc;
+    int rc;
     struct local_io_private *const priv = cb->data;
 
-	if ((rc = blk_dev_flush(priv)))
-		return rc;
+    if ((rc = blk_dev_flush(priv)))
+        return rc;
 
     return (*priv->inner->flush)(cb);
 }
@@ -143,7 +145,8 @@ local_io_destroy(struct cloudbacker_store *cb)
     pthread_mutex_unlock(&priv->mutex);
     
     /* Destroy inner store */
-    (*priv->inner->destroy)(priv->inner);
+    if(priv->inner != NULL)
+        (*priv->inner->destroy)(priv->inner);
 
     /* Free structures */
     pthread_mutex_destroy(&priv->mutex);

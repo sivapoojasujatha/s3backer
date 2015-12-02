@@ -236,6 +236,7 @@ extern int blk_dev_close(struct local_io_private *priv)
         blk_dev_write_bitmap(priv);
   
         /* close file */
+        (*handle->log)(LOG_INFO, "closing block device file");
         close(handle->fd);
 
         free(handle);

@@ -21,6 +21,8 @@
 
 #include <inttypes.h>
 
+#define BLK_DEV_CAN_BE_USED         1
+#define BLK_DEV_CANNOT_BE_USED      0
 
 /* local store layer config structure */
 struct localStore_io_conf {
@@ -30,6 +32,7 @@ struct localStore_io_conf {
     char                *blk_dev_path;
     int                 readOnly;
     log_func_t          *log;
+    int                 block_device_status;
 };
 
 /* Statistics structure for localStore_io */
