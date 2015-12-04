@@ -128,6 +128,7 @@ struct http_io_stats {
     /* Block stats */
     u_int               normal_blocks_read;
     u_int               normal_blocks_written;
+    u_int               normal_bytes_written;
     u_int               zero_blocks_read;
     u_int               zero_blocks_written;
     u_int               empty_blocks_read;          // only when nonzero_bitmap != NULL

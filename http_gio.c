@@ -1575,10 +1575,12 @@ http_io_write_block(struct cloudbacker_store *const cb, cb_block_t block_num, co
     /* Update stats */
     if (r == 0) {
         pthread_mutex_lock(&priv->mutex);
-        if (src == NULL)
+        if (src == NULL) {
             priv->stats.zero_blocks_written++;
-        else
+        } else {
             priv->stats.normal_blocks_written++;
+            priv->stats.normal_bytes_written += io.buf_size;
+        }
         pthread_mutex_unlock(&priv->mutex);
     }
 

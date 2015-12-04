@@ -764,6 +764,7 @@ cb_config_print_stats(void *prarg, printer_t *printer)
     if (http_io_store != NULL) {
         (*printer)(prarg, "%-28s %u\n", "http_normal_blocks_read", http_io_stats.normal_blocks_read);
         (*printer)(prarg, "%-28s %u\n", "http_normal_blocks_written", http_io_stats.normal_blocks_written);
+        (*printer)(prarg, "%-28s %u\n", "http_normal_bytes_written", http_io_stats.normal_bytes_written);
         (*printer)(prarg, "%-28s %u\n", "http_zero_blocks_read", http_io_stats.zero_blocks_read);
         (*printer)(prarg, "%-28s %u\n", "http_zero_blocks_written", http_io_stats.zero_blocks_written);
         if (config.list_blocks || config.list_blocks_async) {
