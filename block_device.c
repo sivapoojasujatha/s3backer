@@ -594,13 +594,18 @@ blk_dev_validate_config(blk_dev_handle_t handle)
         return DEVICE_CANT_BE_USED;
     }
   
-    /* validate size */
-    if ((handle->cb_size > size) || (handle->cb_size != handle->meta.data.size)) {
+    /*
+     * validate size and check size compatibility 
+     * cloudbacker mounted file system size should always be (block device size - (sizeof(meta.data)+meta.data.bitmap_size))
+     */
+    if ((handle->cb_size > size) || (handle->cb_size != handle->meta.data.size) ||
+        (handle->cb_size > (size - (sizeof(handle->meta.data) + handle->meta.data.bitmap_size)))) {
         (*handle->log)(LOG_ERR, "block device metadata size %"PRIi64" is not compatible with the filesystem size %"PRIi64"",
-                   	         handle->meta.data.size, handle->cb_size);
+                   	         size, handle->cb_size);
         (*handle->log)(LOG_INFO, "incorrect size: block device size: %"PRIi64""
                                  ": meta data size: %"PRIi64" : file system size: %"PRIi64"" ,
                                  size, handle->meta.data.size, handle->cb_size); 
+        (*handle->log)(LOG_INFO, "file system size should be slightly(1MB or 2MB) less than the block device size");
         return DEVICE_CANT_BE_USED;
     }
 

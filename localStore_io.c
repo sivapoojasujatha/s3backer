@@ -124,7 +124,16 @@ local_io_flush(struct cloudbacker_store *const cb)
     int rc;
     struct local_io_private *const priv = cb->data;
 
-    if ((rc = blk_dev_flush(priv)))
+    /* Grab lock and sanity check */
+    pthread_mutex_lock(&priv->mutex);
+
+    /* flush data */
+    rc = blk_dev_flush(priv);
+
+    /* Release lock */
+    pthread_mutex_unlock(&priv->mutex);
+
+    if (rc != 0)
         return rc;
 
     return (*priv->inner->flush)(cb);
@@ -185,6 +194,9 @@ local_io_write_block(struct cloudbacker_store *cb, cb_block_t block_num, const v
     if ((config->blocksize == 0) || (block_num >= num_blocks))
         return EINVAL;
  
+    /* get lock */
+    pthread_mutex_lock(&priv->mutex);
+
     /* Will write zero blocks locally for now but log this */
      if (src != NULL) {
          if (local_io_is_zero_block(src, config->blocksize))
@@ -200,8 +212,6 @@ local_io_write_block(struct cloudbacker_store *cb, cb_block_t block_num, const v
     (*config->log)(LOG_DEBUG, "localStore :: write block : %0*jx %s",
                                CB_BLOCK_NUM_DIGITS, (uintmax_t)block_num, (src == NULL) ? " (zero block)" : "(nonzero block)");
 
-    /* get lock */
-    pthread_mutex_lock(&priv->mutex);
 
     if (priv->bitmap != NULL) {
         const int bits_per_word = sizeof(*priv->bitmap) * BITS_IN_CHAR;
@@ -216,6 +226,8 @@ local_io_write_block(struct cloudbacker_store *cb, cb_block_t block_num, const v
         }
         if((r = blk_dev_write(priv, src, offset, config->blocksize)) == config->blocksize)
            r = 0; //write success
+        else 
+           r = EIO; 
        
         priv->bitmap[word] |= bit;
 
@@ -243,6 +255,9 @@ local_io_read_block(struct cloudbacker_store *const cb, cb_block_t block_num, vo
     if ((config->blocksize == 0) || (block_num >= num_blocks))
         return EINVAL;
 
+    /* get lock */
+    pthread_mutex_lock(&priv->mutex);
+
     off_t offset = 0;
     int r = 0;
 
@@ -251,9 +266,6 @@ local_io_read_block(struct cloudbacker_store *const cb, cb_block_t block_num, vo
  
     /* Logging */
     (*config->log)(LOG_DEBUG, "localStore :: read block: %0*jx", CB_BLOCK_NUM_DIGITS, (uintmax_t)block_num);
-
-    /* get lock */
-    pthread_mutex_lock(&priv->mutex);
 
      if (priv->bitmap != NULL) {
         const int bits_per_word = (sizeof(*priv->bitmap) * BITS_IN_CHAR);
@@ -265,6 +277,8 @@ local_io_read_block(struct cloudbacker_store *const cb, cb_block_t block_num, vo
 
             if((r = blk_dev_read(priv, dest, offset, config->blocksize)) == config->blocksize)
                r = 0;     //read success
+            else
+               r = EIO;
 
             /* Check if block read is zero block */
             if(local_io_is_zero_block(dest,config->blocksize)){

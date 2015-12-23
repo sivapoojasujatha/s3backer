@@ -471,6 +471,9 @@ operation will be performed from cloud storage or test directory(if '--test' fla
 .Pp
 IO operations on block device are block aligned.
 .Pp
+Please configure the block device to be used with 'localStore' argument with couple of more blocks or device size with
+one or two megabytes more than the cloudbacker file system size, so that block device will have enough space for metadata.
+.Pp
 .It Fl \-cacert=FILE
 Specify SSL certificate file to be used when verifying the remote server's identity when operating over SSL connections.
 Equivalent to the
