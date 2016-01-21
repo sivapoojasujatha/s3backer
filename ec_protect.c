@@ -121,7 +121,7 @@ static int ec_protect_write_block(struct cloudbacker_store *cb, cb_block_t block
   check_cancel_t *check_cancel, void *check_cancel_arg);
 static int ec_protect_read_block_part(struct cloudbacker_store *cb, cb_block_t block_num, u_int off, u_int len, void *dest);
 static int ec_protect_write_block_part(struct cloudbacker_store *cb, cb_block_t block_num, u_int off, u_int len, const void *src);
-static int ec_protect_flush(struct cloudbacker_store *cb);
+static int ec_protect_flush(struct cloudbacker_store *cb, int stop);
 static void ec_protect_destroy(struct cloudbacker_store *cb);
 
 /* Misc */
@@ -250,7 +250,7 @@ ec_protect_init(struct cloudbacker_store *cb, int mounted)
 
 
 static int
-ec_protect_flush(struct cloudbacker_store *const cb)
+ec_protect_flush(struct cloudbacker_store *const cb, int stop)
 {
     struct ec_protect_private *const priv = cb->data;
 

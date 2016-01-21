@@ -152,12 +152,14 @@ struct block_cache_private {
     u_int                           thread_id;      // next thread id
     u_int                           num_threads;    // number of alive worker threads
     int                             stopping;       // signals worker threads to exit
+    int                             flush;          // flush dirty blocks
     pthread_mutex_t                 mutex;          // my mutex
     pthread_cond_t                  space_avail;    // there is new space available in cache
     pthread_cond_t                  end_reading;    // some entry in state READING[2] changed state
     pthread_cond_t                  worker_work;    // there is new work for worker thread(s)
     pthread_cond_t                  worker_exit;    // a worker thread has exited
     pthread_cond_t                  write_complete; // a write has completed
+    pthread_cond_t                  flush_complete; // flush of dirty blocks has completed
 };
 
 /* Callback info */
@@ -177,7 +179,7 @@ static int block_cache_write_block(struct cloudbacker_store *cb, cb_block_t bloc
 static int block_cache_read_block_part(struct cloudbacker_store *cb, cb_block_t block_num, u_int off, u_int len, void *dest);
 static int block_cache_write_block_part(struct cloudbacker_store *cb, cb_block_t block_num, u_int off, u_int len, const void *src);
 static int block_cache_list_blocks(struct cloudbacker_store *cb, block_list_func_t *callback, void *arg);
-static int block_cache_flush(struct cloudbacker_store *cb);
+static int block_cache_flush(struct cloudbacker_store *cb, int stop);
 static void block_cache_destroy(struct cloudbacker_store *cb);
 static int block_cache_init(struct cloudbacker_store *cb,int mounted);
 
@@ -266,10 +268,13 @@ block_cache_create(struct block_cache_conf *config, struct cloudbacker_store *in
         goto fail6;
     if ((r = pthread_cond_init(&priv->write_complete, NULL)) != 0)
         goto fail7;
+    if ((r = pthread_cond_init(&priv->flush_complete, NULL)) != 0)
+        goto fail8;
+
     TAILQ_INIT(&priv->cleans);
     TAILQ_INIT(&priv->dirties);
     if ((r = cb_hash_create(&priv->hashtable, config->cache_size)) != 0)
-        goto fail8;
+        goto fail9;
     cb->data = priv;
 
     /* Compute dirty ratio at which we will be writing immediately */
@@ -281,7 +286,7 @@ block_cache_create(struct block_cache_conf *config, struct cloudbacker_store *in
     if (config->cache_file != NULL) {
         if ((r = cb_dcache_open(&priv->dcache, config->log, config->cache_file, config->block_size,
           config->cache_size, block_cache_dcache_load, priv)) != 0)
-            goto fail9;
+            goto fail10;
         priv->stats.initial_size = priv->num_cleans;
     }
 
@@ -292,14 +297,14 @@ block_cache_create(struct block_cache_conf *config, struct cloudbacker_store *in
     /* Create threads */
     for (priv->num_threads = 0; priv->num_threads < config->num_threads; priv->num_threads++) {
         if ((r = pthread_create(&thread, NULL, block_cache_worker_main, priv)) != 0)
-            goto fail10;
+            goto fail11;
     }
 
     /* Done */
     pthread_mutex_unlock(&priv->mutex);
     return cb;
 
-fail10:
+fail11:
     priv->stopping = 1;
     while (priv->num_threads > 0) {
         pthread_cond_broadcast(&priv->worker_work);
@@ -312,8 +317,10 @@ fail10:
         }
         cb_dcache_close(priv->dcache);
     }
-fail9:
+fail10:
     cb_hash_destroy(priv->hashtable);
+fail9:
+    pthread_cond_destroy(&priv->flush_complete);
 fail8:
     pthread_cond_destroy(&priv->write_complete);
 fail7:
@@ -395,20 +402,38 @@ block_cache_set_mounted(struct cloudbacker_store *cb, int *old_valuep, int new_v
 }
 
 static int
-block_cache_flush(struct cloudbacker_store *const cb)
+block_cache_flush(struct cloudbacker_store *const cb, int stop)
 {
     struct block_cache_private *const priv = cb->data;
+    struct block_cache_conf *const config = priv->config;
 
     /* Grab lock and sanity check */
     pthread_mutex_lock(&priv->mutex);
     CBCACHE_CHECK_INVARIANTS(priv);
 
-    /* Wait for all dirty blocks to be written and all worker threads to exit */
-    priv->stopping = 1;
-    while (TAILQ_FIRST(&priv->dirties) != NULL || priv->num_threads > 0) {
-        pthread_cond_broadcast(&priv->worker_work);
-        pthread_cond_wait(&priv->worker_exit, &priv->mutex);
+    /*
+     * If priv->flush is set, this is an fsync(), and we wait for all the
+     * dirty blocks to be written out. If priv->stopping is set, we are
+     * in the shutdown sequence, so wait for all worker threads to exit
+     */
+    if (stop == 0) {
+	priv->flush = 1;
+	while (TAILQ_FIRST(&priv->dirties) != NULL) {
+	    pthread_cond_broadcast(&priv->worker_work);
+	    pthread_cond_wait(&priv->flush_complete, &priv->mutex);
+	}
+    } else {
+	priv->stopping = 1;
+	while (TAILQ_FIRST(&priv->dirties) != NULL || priv->num_threads > 0) {
+	    pthread_cond_broadcast(&priv->worker_work);
+	    pthread_cond_wait(&priv->worker_exit, &priv->mutex);
+	}
     }
+
+    if(TAILQ_FIRST(&priv->dirties) != NULL)
+        (*config->log)(LOG_ERR, "flusing dirty blocks - incomplete");
+    else
+        (*config->log)(LOG_DEBUG, "flushing dirty blocks - completed");
 
     /* Release lock */
     pthread_mutex_unlock(&priv->mutex);
@@ -440,6 +465,7 @@ block_cache_destroy(struct cloudbacker_store *const cb)
         cb_dcache_close(priv->dcache);
     cb_hash_foreach(priv->hashtable, block_cache_free_one, priv);
     cb_hash_destroy(priv->hashtable);
+    pthread_cond_destroy(&priv->flush_complete);
     pthread_cond_destroy(&priv->write_complete);
     pthread_cond_destroy(&priv->worker_exit);
     pthread_cond_destroy(&priv->worker_work);
@@ -1056,7 +1082,7 @@ block_cache_worker_main(void *arg)
         adjusted_now = now + (uint32_t)(priv->dirty_timeout * (block_cache_dirty_ratio(priv) / priv->max_dirty_ratio));
 
         /* See if there is a block that needs writing */
-        if ((entry = TAILQ_FIRST(&priv->dirties)) != NULL && (priv->stopping || adjusted_now >= entry->timeout)) {
+        if ((entry = TAILQ_FIRST(&priv->dirties)) != NULL && (priv->stopping || priv->flush || adjusted_now >= entry->timeout)) {
 
             /* If we are also supposed to do read-ahead, wake up a sibling to handle it */
             if (priv->seq_count >= config->read_ahead_trigger && priv->ra_count < config->read_ahead)
@@ -1087,6 +1113,7 @@ block_cache_worker_main(void *arg)
             assert(ENTRY_GET_STATE(entry) == WRITING || ENTRY_GET_STATE(entry) == WRITING2);
 
             /* If write attempt failed (or we canceled it), go back to the DIRTY state and try again later */
+            /* retry writing the block only for EIO error */
             if (r != 0) {
                 entry->dirty = 1;
                 TAILQ_INSERT_HEAD(&priv->dirties, entry, link);
@@ -1116,8 +1143,20 @@ block_cache_worker_main(void *arg)
             continue;
         }
 
-        /* Are we supposed to stop? */
-        if (priv->stopping != 0)
+	/* Check if flush is complete and if so, reset the flag and signal to the caller */
+	if (TAILQ_FIRST(&priv->dirties) == NULL && priv->flush != 0) {
+	    priv->flush = 0;            
+	    pthread_cond_signal(&priv->flush_complete);
+	}
+
+        assert((TAILQ_FIRST(&priv->dirties) == NULL || (priv->flush == 0 && priv->stopping == 0 && (entry == NULL || adjusted_now < entry->timeout))));
+
+        /*
+	 * Are we supposed to stop?
+	 * Still check to see that there are no more dirty blocks, even though there should not be any
+	 * (all the codes in the if() {..} above do continue)
+	 */
+        if (TAILQ_FIRST(&priv->dirties) == NULL && priv->stopping != 0)
             break;
 
         /* See if there is a read-ahead block that needs to be read */

@@ -36,7 +36,7 @@ static int local_io_read_block_part(struct cloudbacker_store *cb, cb_block_t blo
 static int local_io_write_block_part(struct cloudbacker_store *cb, cb_block_t block_num, u_int off, 
                                      u_int len, const void *src);
 static void local_io_destroy(struct cloudbacker_store *cb);
-static int local_io_flush(struct cloudbacker_store *const cb);
+static int local_io_flush(struct cloudbacker_store *const cb, int stop);
 
 static int local_io_is_zero_block(const void *data, u_int block_size);
 
@@ -119,7 +119,7 @@ local_io_init(struct cloudbacker_store *cb, int mounted)
 }
 
 static int
-local_io_flush(struct cloudbacker_store *const cb)
+local_io_flush(struct cloudbacker_store *const cb, int stop)
 {
     int rc;
     struct local_io_private *const priv = cb->data;
@@ -136,7 +136,7 @@ local_io_flush(struct cloudbacker_store *const cb)
     if (rc != 0)
         return rc;
 
-    return (*priv->inner->flush)(cb);
+    return (*priv->inner->flush)(cb, stop);
 }
 
 static void 
@@ -148,7 +148,7 @@ local_io_destroy(struct cloudbacker_store *cb)
 
     blk_dev_close(priv);
 
-   if(priv->bitmap != NULL)
+    if(priv->bitmap != NULL)
        free(priv->bitmap);
    
     pthread_mutex_unlock(&priv->mutex);

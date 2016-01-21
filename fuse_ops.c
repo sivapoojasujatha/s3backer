@@ -179,7 +179,7 @@ fuse_op_destroy(void *data)
     /* Flush dirty data */
     if (!config->read_only) {
         (*config->log)(LOG_INFO, "unmount %s: flushing dirty data", cbconf->mount);
-        if ((r = (*cb->flush)(cb)) != 0)
+        if ((r = (*cb->flush)(cb, 1)) != 0)
             (*config->log)(LOG_ERR, "unmount %s: flushing filesystem failed: %s", cbconf->mount, strerror(r));
     }
 
@@ -522,7 +522,25 @@ fuse_op_flush(const char *path, struct fuse_file_info *fi)
 static int
 fuse_op_fsync(const char *path, int isdatasync, struct fuse_file_info *fi)
 {
-    return 0;
+    struct fuse_ops_private *const priv = (struct fuse_ops_private *)fuse_get_context()->private_data;
+    struct cloudbacker_store *const cb = priv != NULL ? priv->cb : NULL;
+    struct cb_config *const cbconf = config->cbconf;
+    int r = 0;
+
+    /* Sanity check */
+    if (priv == NULL || cb == NULL)
+        return 0;
+
+    /* Flush dirty data */
+    (*config->log)(LOG_INFO, "fsync %s: initiated", cbconf->mount);
+    if (!config->read_only) {
+        (*config->log)(LOG_INFO, "fsync %s: flushing dirty data", cbconf->mount);
+        if ((r = (*cb->flush)(cb, 0)) != 0)
+            (*config->log)(LOG_ERR, "fsync %s: flushing filesystem failed: %s", cbconf->mount, strerror(r));
+    }
+
+    (*config->log)(LOG_INFO, "fsync %s: completed, status %d", cbconf->mount, r);
+    return r;
 }
 
 #if FUSE_FALLOCATE

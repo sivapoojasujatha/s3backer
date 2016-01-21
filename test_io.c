@@ -45,7 +45,7 @@ static int test_io_write_block(struct cloudbacker_store *cb, cb_block_t block_nu
 static int test_io_read_block_part(struct cloudbacker_store *cb, cb_block_t block_num, u_int off, u_int len, void *dest);
 static int test_io_write_block_part(struct cloudbacker_store *cb, cb_block_t block_num, u_int off, u_int len, const void *src);
 static int test_io_list_blocks(struct cloudbacker_store *cb, block_list_func_t *callback, void *arg);
-static int test_io_flush(struct cloudbacker_store *cb);
+static int test_io_flush(struct cloudbacker_store *cb, int stop);
 static void test_io_destroy(struct cloudbacker_store *cb);
 
 /*
@@ -102,7 +102,7 @@ test_io_set_mounted(struct cloudbacker_store *cb, int *old_valuep, int new_value
 }
 
 static int
-test_io_flush(struct cloudbacker_store *const cb)
+test_io_flush(struct cloudbacker_store *const cb, int stop)
 {
     return 0;
 }

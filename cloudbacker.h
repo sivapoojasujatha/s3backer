@@ -219,7 +219,7 @@ struct cloudbacker_store {
     /*
      * Sync any dirty data to the underlying data store.
      */
-    int         (*flush)(struct cloudbacker_store *cb);
+    int         (*flush)(struct cloudbacker_store *cb, int stop);
 
     /*
      * Destroy this instance.

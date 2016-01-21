@@ -37,7 +37,7 @@ static int http_io_set_meta_data(struct cloudbacker_store *cb, int operation);
 static int http_io_read_block_part(struct cloudbacker_store *cb, cb_block_t block_num, u_int off, u_int len, void *dest);
 static int http_io_write_block_part(struct cloudbacker_store *cb, cb_block_t block_num, u_int off, u_int len, const void *src);
 static int http_io_list_blocks(struct cloudbacker_store *cb, block_list_func_t *callback, void *arg);
-static int http_io_flush(struct cloudbacker_store *cb);
+static int http_io_flush(struct cloudbacker_store *cb, int stop);
 static void http_io_destroy(struct cloudbacker_store *cb);
 static int http_io_set(struct cloudbacker_store *cb, int mounted);
 /* Misc */
@@ -411,7 +411,7 @@ http_io_destroy(struct cloudbacker_store *const cb)
 }
 
 static int
-http_io_flush(struct cloudbacker_store *const cb)
+http_io_flush(struct cloudbacker_store *const cb, int stop)
 {
     return 0;
 }
