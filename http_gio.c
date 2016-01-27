@@ -2445,8 +2445,8 @@ update_credentials_main(void *arg)
 
     while (!priv->shutting_down) {
 
-        // Sleep for five minutes
-        sleep(300);
+        // Sleep for twenty five minutes
+        sleep(1500);
 
         // Shutting down?
         if (priv->shutting_down)

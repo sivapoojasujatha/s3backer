@@ -153,6 +153,7 @@ struct block_cache_private {
     u_int                           num_threads;    // number of alive worker threads
     int                             stopping;       // signals worker threads to exit
     int                             flush;          // flush dirty blocks
+    int                             err_write_block;// error code to store write block failure 
     pthread_mutex_t                 mutex;          // my mutex
     pthread_cond_t                  space_avail;    // there is new space available in cache
     pthread_cond_t                  end_reading;    // some entry in state READING[2] changed state
@@ -407,9 +408,13 @@ block_cache_flush(struct cloudbacker_store *const cb, int stop)
     struct block_cache_private *const priv = cb->data;
     struct block_cache_conf *const config = priv->config;
 
+    int r = 0;
     /* Grab lock and sanity check */
     pthread_mutex_lock(&priv->mutex);
     CBCACHE_CHECK_INVARIANTS(priv);
+
+    /* log number of dirty blocks to be flushed */
+    (*config->log)(LOG_DEBUG, "number of dirty blocks to flush : %u", priv->num_dirties);
 
     /*
      * If priv->flush is set, this is an fsync(), and we wait for all the
@@ -429,15 +434,19 @@ block_cache_flush(struct cloudbacker_store *const cb, int stop)
 	    pthread_cond_wait(&priv->worker_exit, &priv->mutex);
 	}
     }
-
-    if(TAILQ_FIRST(&priv->dirties) != NULL)
+    if(priv->num_dirties > 0) {
+        r = priv->err_write_block;    // return error
         (*config->log)(LOG_ERR, "flusing dirty blocks - incomplete");
-    else
-        (*config->log)(LOG_DEBUG, "flushing dirty blocks - completed");
+        (*config->log)(LOG_DEBUG, "number of dirty blocks remaining to be flushed : %u", priv->num_dirties); 
+    }
+    else {
+        r = 0;
+        (*config->log)(LOG_INFO, "flushing dirty blocks - completed");
+    }
 
     /* Release lock */
     pthread_mutex_unlock(&priv->mutex);
-    return 0;
+    return r;
 }
 
 static void
@@ -1113,11 +1122,19 @@ block_cache_worker_main(void *arg)
             assert(ENTRY_GET_STATE(entry) == WRITING || ENTRY_GET_STATE(entry) == WRITING2);
 
             /* If write attempt failed (or we canceled it), go back to the DIRTY state and try again later */
-            /* retry writing the block only for EIO error */
-            if (r != 0) {
-                entry->dirty = 1;
-                TAILQ_INSERT_HEAD(&priv->dirties, entry, link);
-                continue;
+            if(r != 0) {
+                (*config->log)(LOG_ERR, "error writing block %0*jx : %s", CB_BLOCK_NUM_DIGITS, (uintmax_t)entry->block_num, strerror(r));
+                /* priv->num_dirties will have number of dirty blocks present in queue, after flush or before unmounting 
+                 * priv->num_dirties should be 0 
+                 */
+                /* store the error code to let user know, that there was some issue with writing atleast one of the block */
+                priv->err_write_block = r;    
+                /* retry writing the block only for some errors */
+                if(r == ENXIO || r == EACCES || r == EIO ||  r == ECONNABORTED) {                    
+                    entry->dirty = 1;
+                    TAILQ_INSERT_HEAD(&priv->dirties, entry, link);
+                    continue;
+                }
             }
 
             /* If block was not modified while being written (WRITING), it is now CLEAN */
