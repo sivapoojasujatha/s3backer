@@ -780,6 +780,7 @@ cb_config_print_stats(void *prarg, printer_t *printer)
           http_io_stats.http_puts.time / http_io_stats.http_puts.count : 0.0);
         (*printer)(prarg, "%-28s %.3f sec\n", "http_avg_delete_time", http_io_stats.http_deletes.count > 0 ?
           http_io_stats.http_deletes.time / http_io_stats.http_deletes.count : 0.0);
+        (*printer)(prarg, "%-28s %u\n", "http_bad_request", http_io_stats.http_bad_request);
         (*printer)(prarg, "%-28s %u\n", "http_unauthorized", http_io_stats.http_unauthorized);
         (*printer)(prarg, "%-28s %u\n", "http_forbidden", http_io_stats.http_forbidden);
         (*printer)(prarg, "%-28s %u\n", "http_stale", http_io_stats.http_stale);

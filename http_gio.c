@@ -2048,6 +2048,12 @@ http_io_perform_io(struct http_io_private *priv, struct http_io *io, http_io_cur
                 if (config->debug)
                     (*config->log)(LOG_DEBUG, "rec'd %ld response: %s %s", http_code, io->method, io->url);
                 return ENOENT;
+            case HTTP_BAD_REQUEST:
+                 (*config->log)(LOG_ERR, "rec'd %ld response: %s %s", http_code, io->method, io->url);
+                pthread_mutex_lock(&priv->mutex);
+                priv->stats.http_bad_request++;
+                pthread_mutex_unlock(&priv->mutex);
+                return EPERM;                         /* as of now return this error, but may require to change */
             case HTTP_UNAUTHORIZED:
                 (*config->log)(LOG_ERR, "rec'd %ld response: %s %s", http_code, io->method, io->url);
                 pthread_mutex_lock(&priv->mutex);

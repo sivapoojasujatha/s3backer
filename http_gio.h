@@ -31,6 +31,7 @@
 #define HTTP_DELETE                 "DELETE"
 #define HTTP_HEAD                   "HEAD"
 #define HTTP_NOT_MODIFIED           304
+#define HTTP_BAD_REQUEST            400
 #define HTTP_UNAUTHORIZED           401
 #define HTTP_FORBIDDEN              403
 #define HTTP_NOT_FOUND              404
@@ -139,6 +140,7 @@ struct http_io_stats {
     struct http_io_evst http_gets;                  // total successful
     struct http_io_evst http_puts;                  // total successful
     struct http_io_evst http_deletes;               // total successful
+    u_int               http_bad_request;
     u_int               http_unauthorized;
     u_int               http_forbidden;
     u_int               http_stale;
