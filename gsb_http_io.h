@@ -61,7 +61,7 @@
  * Authentication related definitions
  */
 
-#define GCS_AUTHENTICATION_URL      "https://www.googleapis.com/oauth2/v3/token"
+#define GCS_AUTHENTICATION_URL		"https://www.googleapis.com/oauth2/v4/token"
 
 /* JWT constants */
 
@@ -77,7 +77,7 @@
 #define JWT_CLAIMSET_SCOPE              "scope"
 #define JWT_CLAIMSET_SCOPE_VALUE        "https://www.googleapis.com/auth/devstorage.full_control"
 #define JWT_CLAIMSET_AUD                "aud"
-#define JWT_CLAIMSET_AUD_VALUE          "https://www.googleapis.com/oauth2/v3/token"
+#define JWT_CLAIMSET_AUD_VALUE          GCS_AUTHENTICATION_URL
 #define JWT_CLAIMSET_EXP                "exp"
 #define JWT_CLAIMSET_IAT                "iat"
 #define JWT_CLAIMSET_EXP_DURATION       3600     // google auth token expires after 3600sec

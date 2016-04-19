@@ -156,7 +156,7 @@ http_io_create(struct http_io_conf *config)
     }
     priv->config = config;
 
-    /* Allocate memory for http IO parameters structure*/
+    /* Allocate memory for http IO parameters structure */
     if ((priv->config->http_io_params = calloc(1, sizeof(*(priv->config->http_io_params)))) == NULL) {
         r = errno;
         goto fail2;
@@ -405,6 +405,7 @@ http_io_destroy(struct cloudbacker_store *const cb)
 
     /* Free structures */
     pthread_mutex_destroy(&priv->mutex);
+    free(priv->config->http_io_params);
     free(priv->non_zero);
     free(priv);
     free(cb);
@@ -830,7 +831,7 @@ http_io_meta_data(struct cloudbacker_store *cb)
 {
     struct http_io_private *const priv = cb->data;
     struct http_io_conf *const config = priv->config;
-    char urlbuf[URL_BUF_SIZE(config)+sizeof(ZERO_FILLED_META_DATA_BLOCK)];
+    char urlbuf[URL_BUF_SIZE(config)+sizeof(META_DATA_BLOCK)];
     const time_t now = time(NULL);
     struct http_io io;
     int r = 0;
@@ -1314,7 +1315,7 @@ http_io_set_meta_data(struct cloudbacker_store *cb, int operation)
 {
     struct http_io_private *const priv = cb->data;
     struct http_io_conf *const config = priv->config;
-    char urlbuf[URL_BUF_SIZE(config)+ sizeof(ZERO_FILLED_META_DATA_BLOCK)+strlen(config->prefix)];
+    char urlbuf[URL_BUF_SIZE(config)+ sizeof(META_DATA_BLOCK)+strlen(config->prefix)];
     const time_t now = time(NULL);
     struct http_io io;
     int r;
@@ -1633,10 +1634,10 @@ http_io_get_meta_data_block_url(char *buf, size_t bufsiz, struct http_io_conf *c
     int len;
 
     if (config->vhost)
-        len = snprintf(buf, bufsiz, "%s%s%s", config->baseURL, config->prefix, ZERO_FILLED_META_DATA_BLOCK);
+        len = snprintf(buf, bufsiz, "%s%s%s", config->baseURL, config->prefix, META_DATA_BLOCK);
     else {
         len = snprintf(buf, bufsiz, "%s%s/%s%s", config->baseURL,
-                       config->bucket, config->prefix, ZERO_FILLED_META_DATA_BLOCK);
+                       config->bucket, config->prefix, META_DATA_BLOCK);
     }
     (void)len;                  /* avoid compiler warning when NDEBUG defined */
     assert(len < bufsiz);
@@ -1712,20 +1713,43 @@ http_io_openssl_ider(void)
 }
 
 void
-http_io_base64_encode(char *buf, size_t bufsiz, const void *data, size_t len)
+http_io_base64_encode(char *buf, size_t bufsize, const void *data, size_t len)
 {
     BUF_MEM *bptr;
     BIO* bmem;
     BIO* b64;
+    size_t plen;
 
     b64 = BIO_new(BIO_f_base64());
     bmem = BIO_new(BIO_s_mem());
     b64 = BIO_push(b64, bmem);
+    BIO_set_flags(b64, BIO_FLAGS_BASE64_NO_NL);
     BIO_write(b64, data, len);
     (void)BIO_flush(b64);
     BIO_get_mem_ptr(b64, &bptr);
-    snprintf(buf, bufsiz, "%.*s", (int)bptr->length - 1, (char *)bptr->data);
+    plen = snprintf(buf, bufsize, "%.*s", (int)bptr->length, (char *)bptr->data);
+    assert(plen < bufsize);
     BIO_free_all(b64);
+}
+
+void
+http_io_base64_encode_safe(char *buf, size_t bufsize, const void *data, size_t len)
+{
+    int i;
+    http_io_base64_encode(buf, bufsize, data, len);
+    /* URL safe base 64 encoding, replace according to RFC4648 */
+    for (i = 0; buf[i] != '\0' && i < bufsize; i++) {
+        switch (buf[i]) {
+	case '/':
+	    buf[i] = '_'; /* underline */
+	    break;
+	case '+':
+	    buf[i] = '-'; /* minus */
+	    break;
+	default:
+	    break;
+	}
+    }
 }
 
 int

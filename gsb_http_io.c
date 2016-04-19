@@ -30,8 +30,8 @@
 /* Authentication functions */
 static char *create_jwt_token(const char *gcs_clientId);
 static char *create_jwt_authrequest(struct http_io_private *priv );
-static int sign_p12_key(const struct http_io_conf *const config, char *certFile,const char* pwd, char *plainText, char *signed_buf);
-static void replace_chars(char *jwt);
+static int sign_with_p12_key(const struct http_io_conf *const config, char *key_file,
+			     const char *pwd, char *plain_text, char *signed_buf, size_t buf_len);
 static void http_io_gcs_auth_prepper(CURL *curl, struct http_io *io);
 
 /* NULL-terminated vector of header parsers */
@@ -116,18 +116,21 @@ int update_gcs_credentials(struct http_io_private *const priv)
     io.dest = buf;
     io.buf_size = sizeof(buf);
     
-   /* Perform operation */
-   (*config->log)(LOG_INFO, "acquiring GCS access token %s", io.url);
+    /* Perform operation */
+    (*config->log)(LOG_INFO, "acquiring GCS access token %s", io.url);
 
-   if((io.post_data = create_jwt_authrequest(priv)) != NULL){
-        if ((r = http_io_perform_io(priv, &io,http_io_gcs_auth_prepper)) != 0) {
-             (*config->log)(LOG_ERR, "failed to acquire access token from google cloud storage from %s: %s", io.url, strerror(r));
-             return r;
-        }
-    }
-    else{
-        (*config->log)(LOG_ERR, "failed to build post request to get access token, error: %s", strerror(r));
+    if ((io.post_data = create_jwt_authrequest(priv)) == NULL) {
+        r = ENOMEM;
+        (*config->log)(LOG_ERR, "failed to build post request to get access token, error: %s",
+		       strerror(r));
         return r;
+    }
+
+    if ((r = http_io_perform_io(priv, &io,http_io_gcs_auth_prepper)) != 0) {
+        r = EBADR;
+        (*config->log)(LOG_ERR, "failed to acquire access token from google cloud storage from %s: %s",
+		       io.url, strerror(r));
+	return r;
     }
 
     /* Determine how many bytes we read */
@@ -194,101 +197,88 @@ create_jwt_token(const char *gcs_clientId)
 
     char jwt_headerbuf[JWT_HEADER_BUF_LEN];
     char jwt_claimsetbuf[JWT_CLAIMSET_BUF_LEN];
+    char b64jwt_headerbuf[512], b64jwt_claimbuf[512];   
+    char *jwt_hdr_claim_buf;
+    time_t seconds;
+    int len, rlen;
 
     /* {"alg":"RS256","typ":"JWT"}  */
-    snprintf(jwt_headerbuf, JWT_HEADER_BUF_LEN, "{\"%s\":\"%s\",\"%s\":\"%s\"}",JWT_HEADER_ALG,
-							JWT_HEADER_RS256,JWT_HEADER_TYPE,JWT_HEADER_JWT);
+    memset(jwt_headerbuf, 0, JWT_HEADER_BUF_LEN);
+    len = snprintf(jwt_headerbuf, JWT_HEADER_BUF_LEN, "{\"%s\":\"%s\",\"%s\":\"%s\"}",
+		   JWT_HEADER_ALG, JWT_HEADER_RS256, JWT_HEADER_TYPE, JWT_HEADER_JWT);
+    assert(len < JWT_HEADER_BUF_LEN);
 
-    time_t seconds;
     seconds = time(NULL);
+    memset(jwt_claimsetbuf, 0, JWT_CLAIMSET_BUF_LEN);
+    len = snprintf(jwt_claimsetbuf, JWT_CLAIMSET_BUF_LEN,
+		   "{\"%s\":\"%s\",\"%s\":\"%s\",\"%s\":\"%s\",\"%s\":%ld,\"%s\":%ld}",
+		   JWT_CLAIMSET_ISS, gcs_clientId,
+		   JWT_CLAIMSET_SCOPE,JWT_CLAIMSET_SCOPE_VALUE,
+		   JWT_CLAIMSET_AUD, JWT_CLAIMSET_AUD_VALUE,
+		   JWT_CLAIMSET_EXP, seconds+JWT_CLAIMSET_EXP_DURATION,
+		   JWT_CLAIMSET_IAT, seconds);
+    assert(len < JWT_CLAIMSET_BUF_LEN);
 
-    int len = 0;
-    /* Determine actual length required by writing initially minimum buffer, say size 20 */
-    if ((len = snprintf(jwt_claimsetbuf, MIN_CLAIMSET_BUF_LEN, "{\"%s\":\"%s\",\"%s\":\"%s\",\"%s\":\"%s\",\"%s\":%ld,\"%s\":%ld}",
-                                JWT_CLAIMSET_ISS, gcs_clientId,
-                                JWT_CLAIMSET_SCOPE,JWT_CLAIMSET_SCOPE_VALUE,
-                                JWT_CLAIMSET_AUD, JWT_CLAIMSET_AUD_VALUE,
-                                JWT_CLAIMSET_EXP, seconds+JWT_CLAIMSET_EXP_DURATION,
-                                JWT_CLAIMSET_IAT, seconds)) >= MIN_CLAIMSET_BUF_LEN){
-       /* Now write the actual buffer */
-       memset(jwt_claimsetbuf,0, len);
-       len = snprintf(jwt_claimsetbuf,len+1, "{\"%s\":\"%s\",\"%s\":\"%s\",\"%s\":\"%s\",\"%s\":%ld,\"%s\":%ld}",
-                                JWT_CLAIMSET_ISS, gcs_clientId,
-                                JWT_CLAIMSET_SCOPE,JWT_CLAIMSET_SCOPE_VALUE,
-                                JWT_CLAIMSET_AUD, JWT_CLAIMSET_AUD_VALUE,
-                                JWT_CLAIMSET_EXP, seconds+JWT_CLAIMSET_EXP_DURATION,
-                                JWT_CLAIMSET_IAT, seconds);
-       assert(len > MIN_CLAIMSET_BUF_LEN && len < JWT_CLAIMSET_BUF_LEN);
-     }
+    memset(b64jwt_headerbuf, 0, sizeof(b64jwt_headerbuf));
+    memset(b64jwt_claimbuf, 0, sizeof(b64jwt_claimbuf));
 
-   char b64jwt_headerbuf[512], b64jwt_claimbuf[512];
-   
-   memset(b64jwt_headerbuf, 0, sizeof(b64jwt_headerbuf));
-   memset(b64jwt_claimbuf,0,sizeof(b64jwt_claimbuf));
-
-   http_io_base64_encode(b64jwt_headerbuf,sizeof(b64jwt_headerbuf),jwt_headerbuf, strlen(jwt_headerbuf));
-   http_io_base64_encode(b64jwt_claimbuf, sizeof(b64jwt_claimbuf), jwt_claimsetbuf, strlen(jwt_claimsetbuf));
+    http_io_base64_encode_safe(b64jwt_headerbuf,sizeof(b64jwt_headerbuf), jwt_headerbuf,
+			       strlen(jwt_headerbuf));
+    http_io_base64_encode_safe(b64jwt_claimbuf, sizeof(b64jwt_claimbuf), jwt_claimsetbuf,
+			       strlen(jwt_claimsetbuf));
 
     // combine jwt_headerbuf and jwt_claimsetbuf
-    char *jwt_hdr_claim_buf = (char*)malloc(strlen(b64jwt_headerbuf)+ strlen(b64jwt_claimbuf)+3);
-    sprintf(jwt_hdr_claim_buf, "%s%s%s",b64jwt_headerbuf, ".", b64jwt_claimbuf);
+    len = strlen(b64jwt_headerbuf) + strlen(b64jwt_claimbuf) + 3;
+    if ((jwt_hdr_claim_buf = (char *)malloc(len)) == NULL)
+        return NULL;
+    rlen = snprintf(jwt_hdr_claim_buf, len, "%s%s%s", b64jwt_headerbuf, ".", b64jwt_claimbuf);
+    assert(rlen < len);
 
     return jwt_hdr_claim_buf;
 }
 
-/* URL safe base 64 encoding, remove some characters explicitly */
-static void 
-replace_chars(char *jwt)
-{
-    int idx = 0;
-    for(idx = 0; idx <strlen(jwt); idx++){
-        if (jwt[idx] == '/')
-           jwt[idx] = '_';
-        else if (jwt[idx] == '+')
-           jwt[idx] = '-';
-        else if (jwt[idx]== '=')
-           jwt[idx] = '*';
-    }
-}
    
 static char *
 create_jwt_authrequest(struct http_io_private *priv)
 {
+#define BUFLEN	1024
     const struct http_io_conf *const config = priv->config;
-    int r = 0;
+    char signed_jwt[BUFLEN], assertion[BUFLEN];
+    char *jwt, *postfields;
+    int len;
+
     /* Anything to do? */
     if (config->auth.u.gs.clientId == NULL)
         return 0;
 
-    char *jwt = NULL;
-    jwt = create_jwt_token((const char *)config->auth.u.gs.clientId);
+    if ((jwt = create_jwt_token((const char *)config->auth.u.gs.clientId)) == NULL)
+        return NULL;
 
-    replace_chars(jwt);
-    
     CRYPTO_malloc_init();
     OpenSSL_add_all_algorithms();
     OpenSSL_add_all_ciphers();
     OpenSSL_add_all_digests();
 
-    char signed_jwt[1024];
+    memset(signed_jwt, 0, BUFLEN);
+    if (sign_with_p12_key(config, config->auth.u.gs.secret_keyfile,
+			  JWT_AUTH_DEFAULT_PASSWORD, jwt, signed_jwt, BUFLEN))
+    	return NULL;
 
-    if((r = sign_p12_key(config, config->auth.u.gs.secret_keyfile,JWT_AUTH_DEFAULT_PASSWORD,jwt, signed_jwt))!= 0){
-       return NULL;
-    }
-    
-    replace_chars(signed_jwt);
-	 
     EVP_cleanup();
-	
-    char assertion[1024];
-    sprintf(assertion,  "%s%s%s", jwt,".", signed_jwt);
+
+    len = snprintf(assertion, BUFLEN, "%s%s%s", jwt, ".", signed_jwt);
+    assert(len < BUFLEN);
+
     free(jwt);
     
-    replace_chars(assertion);
-    
-    char *postfields = (char*) malloc(1024);
-    sprintf(postfields,"%s%s","grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion=",assertion);
-    
+    if ((postfields = (char *)malloc(BUFLEN)) == NULL)
+    	return NULL;
+
+    len = snprintf(postfields, BUFLEN,
+		   "%s%s","grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion=",
+		   assertion);
+    assert(len < BUFLEN);
+
     return postfields;
 }
 
@@ -298,65 +288,76 @@ create_jwt_authrequest(struct http_io_private *priv)
  */
 
 static int
-sign_p12_key(const struct http_io_conf *const config, char *certFile,const char* pwd, char *plainText, char *signed_buf)
+sign_with_p12_key(const struct http_io_conf *const config, char *key_file,
+		  const char *pwd, char *plain_text, char *signed_buf, size_t buflen)
 {
-
     unsigned char hash[SHA256_DIGEST_LENGTH];
     unsigned char sign[256];
-    unsigned int signLen;
+    unsigned int sign_len = 0;
+    FILE *fp = NULL;
+    PKCS12 *p12 = NULL;
+    EVP_PKEY *pkey = NULL;
+    X509 *x509 = NULL;
+    EVP_MD_CTX *ctx = NULL;
+    RSA *prikey = NULL;
+    SHA256_CTX sha256;
+    const char *c;
+    int ret;
 
-    FILE* fp;
-    if (!(fp = fopen(certFile, "rb"))){        
-        (*config->log)(LOG_ERR, "Error opening cert file %s: %s", certFile, strerror(errno));
-        goto fail;
+    memset(hash, 0, SHA256_DIGEST_LENGTH);
+    memset(sign, 0, 256);
+
+    if (!(fp = fopen(key_file, "rb"))){        
+        (*config->log)(LOG_ERR, "Error opening cert file %s: %s",
+		       key_file, strerror(errno));
+	return 1;
     }
 
-    PKCS12 *p12= d2i_PKCS12_fp(fp, NULL);
-    fclose (fp);
+    p12 = d2i_PKCS12_fp(fp, NULL);
+    fclose(fp);
+
     if (!p12) {
-        (*config->log)(LOG_ERR, "Error reading PKCS#12 file: %s", strerror(errno));
-        goto fail;
+        (*config->log)(LOG_ERR, "Error reading PKCS#12 file: %s",
+		       strerror(errno));
+	return 1;
     }
 
-    EVP_PKEY *pkey=NULL;
-    X509 *x509=NULL;
     STACK_OF(X509) *ca = NULL;
-    if (!PKCS12_parse(p12, pwd, &pkey, &x509, &ca)) {
-        (*config->log)(LOG_ERR, "Error parsing PKCS#12 file: %s", strerror(errno));
-        goto fail;
-    }
+    ret = PKCS12_parse(p12, pwd, &pkey, &x509, &ca);
     PKCS12_free(p12);
 
-    signLen=EVP_PKEY_size(pkey);
-    EVP_MD_CTX *ctx = EVP_MD_CTX_create();
+    if (ret == 0) {
+        (*config->log)(LOG_ERR, "Error parsing PKCS#12 file: %s",
+		       strerror(errno));
+	return 1;
+    }
+
+    sign_len = EVP_PKEY_size(pkey);
+    ctx = EVP_MD_CTX_create();
     EVP_MD_CTX_init(ctx);
 
-    RSA *prikey = EVP_PKEY_get1_RSA(pkey);
+    prikey = EVP_PKEY_get1_RSA(pkey);
 
-   SHA256_CTX sha256;
-   SHA256_Init(&sha256);
-   const char *c = plainText;
-   SHA256_Update(&sha256, c, strlen(c));
-   SHA256_Final(hash, &sha256);
+    SHA256_Init(&sha256);
+    c = plain_text;
+    SHA256_Update(&sha256, c, strlen(c));
+    SHA256_Final(hash, &sha256);
       
-   int ret = RSA_sign(NID_sha256, hash, SHA256_DIGEST_LENGTH, sign,  &signLen, prikey);
-   if(ret != 1){
+    ret = RSA_sign(NID_sha256, hash, SHA256_DIGEST_LENGTH, sign,  &sign_len, prikey);
+    EVP_MD_CTX_destroy(ctx);
+    RSA_free(prikey);
+    EVP_PKEY_free(pkey);
+    X509_free(x509);
+
+    if (ret == 0) {
         (*config->log)(LOG_ERR, "Signing p12 key with RSA Signature failed ");
-        goto fail;
-   }
-   EVP_MD_CTX_destroy(ctx);
-   RSA_free(prikey);
-   EVP_PKEY_free(pkey);
-   X509_free(x509);
+	return 1;
+    }
    
-   char tmp_buf[512];
-   memset(signed_buf, 0, sizeof(signed_buf));
-   http_io_base64_encode(tmp_buf,sizeof(tmp_buf),sign,signLen);
-   snprintf(signed_buf, strlen(tmp_buf)+1,"%s", tmp_buf);
-   return 0;
-fail:
-   signed_buf = NULL;
-   return 1;
+    memset(signed_buf, 0, buflen);
+    http_io_base64_encode_safe(signed_buf, buflen, sign, sign_len);
+
+    return 0;
 }
 
 int http_io_gcs_bucket_attributes(struct cloudbacker_store *cb, void *arg)
@@ -382,7 +383,8 @@ int http_io_gcs_bucket_attributes(struct cloudbacker_store *cb, void *arg)
     http_io_get_bucket_url(urlbuf, sizeof(urlbuf), config);
 
     /* prepare url for http request */
-    snprintf(urlbuf + strlen(urlbuf), strlen(BUCKET_PARAM_STORAGECLASS)+2, "?%s", BUCKET_PARAM_STORAGECLASS);
+    snprintf(urlbuf + strlen(urlbuf), strlen(BUCKET_PARAM_STORAGECLASS)+2,
+	     "?%s", BUCKET_PARAM_STORAGECLASS);
 
     /* Add Date header */
     http_io_add_date(priv, &io, now);
@@ -404,7 +406,7 @@ int http_io_gcs_bucket_attributes(struct cloudbacker_store *cb, void *arg)
     buf[buflen] = '\0';
 
     /* If xml response is nothaving the storageClass specified by user */
-    if(strcasestr(buf,config->storageClass) == NULL){
+    if (strcasestr(buf,config->storageClass) == NULL) {
         (*config->log)(LOG_ERR, "Incompatible storageClass specified. ");
         curl_slist_free_all(io.headers);
         return EINVAL;
@@ -414,6 +416,5 @@ done:
     /*  Clean up */
     curl_slist_free_all(io.headers);
     return r;
-
 }
 

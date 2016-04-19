@@ -37,19 +37,19 @@ main(int argc, char **argv)
 
     /* Get configuration */
     if ((config = cloudbacker_get_config(argc, argv)) == NULL)
-        return 1;
+	err(errno, "invalid configuration");
 
     /* Handle `--erase' flag */
     if (config->erase) {
-        if (cloudbacker_erase(config) != 0)
-            return 1;
+        if (cloudbacker_erase(config) != 0 && errno)
+	    err(errno, "bucket erase");
         return 0;
     }
 
     /* Handle `--reset' flag */
     if (config->reset) {
-        if (cloudbacker_reset(config) != 0)
-            return 1;
+        if (cloudbacker_reset(config) != 0 && errno)
+	    err(errno, "bucket mount reset");
         return 0;
     }
 

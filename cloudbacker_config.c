@@ -581,7 +581,7 @@ cloudbacker_get_config(int argc, char **argv)
     const int num_options = sizeof(option_list) / sizeof(*option_list);
     struct fuse_opt dup_option_list[2 * sizeof(option_list) + 1];
     char buf[1024];
-    int i;
+    int i, rc;
 
     /* Remember user creds */
     config.fuse_ops.uid = getuid();
@@ -615,8 +615,8 @@ cloudbacker_get_config(int argc, char **argv)
         return NULL;
 
     /* Validate configuration */
-    if (validate_config() != 0)
-        return NULL;
+    if ((rc = validate_config()) != 0)
+        err(rc, "configuration validation");
 
     /* Set fsname based on configuration */
     snprintf(buf, sizeof(buf), "-ofsname=%s", config.description);
@@ -1413,7 +1413,7 @@ validate_config(void)
         config.http_io.quiet = config.quiet;
         config.http_io.log = config.log;
         if ((cb = http_io_create(&config.http_io)) == NULL)
-            err(1, "http_io_create");
+            err(errno, "http_io_create");
         
         r = (*cb->bucket_attributes)(cb, sClassBuf); 
         /* only for GS, storage class is bucket specific */
@@ -1533,7 +1533,7 @@ validate_config(void)
 
     case ENOENT:
     {
-        const char *why = config.no_auto_detect ? "disabled" : "failed";
+        const char *why = config.no_auto_detect ? "disabled" : "failed (new filesystem?)";
         int config_block_size = config.block_size;
 
         unparse_size_string(blockSizeBuf, sizeof(blockSizeBuf), (uintmax_t)config.block_size);
@@ -1544,7 +1544,7 @@ validate_config(void)
         if (config.block_size == 0){
             config.block_size = CLOUDBACKER_DEFAULT_BLOCKSIZE;
             unparse_size_string(blockSizeBuf, sizeof(blockSizeBuf), (uintmax_t)config.block_size);
-            warnx("error: auto-detection of block size %s; using default block size '%s'", why,blockSizeBuf);
+            warnx("error: auto-detection of block size %s, and block size argument was not provided; using default block size '%s'", why,blockSizeBuf);
         }
         if (!config.quiet) {
             warnx("auto-detection %s", why);
@@ -1560,7 +1560,7 @@ validate_config(void)
             r = (*cb->set_meta_data)(cb, 1 /* PUT operation */);
             if(r != 0){
                 errno = r;
-                err(1, "can't write meta data block");
+                err(r, "can't write meta data block");
             }
         }
 
@@ -1569,7 +1569,7 @@ validate_config(void)
 
     default:
         errno = r;
-        err(1, "can't read data store meta-data");
+        err(r, "can't read data store meta-data");
         break;
     }
 
@@ -1601,13 +1601,13 @@ validate_config(void)
         config.http_io.quiet = config.quiet;
         config.http_io.log = config.log;
         if ((cb = http_io_create(&config.http_io)) == NULL)
-            err(1, "http_io_create");
+            err(errno, "http_io_create");
         
         r = (*cb->set_mounted)(cb, &mounted, -1);
         (*cb->destroy)(cb);
         if (r != 0) {
             errno = r;
-            err(1, "error reading mounted flag");
+            err(r, "error reading mounted flag");
         }
         if (mounted) {
             if (!config.force)
@@ -1628,7 +1628,7 @@ validate_config(void)
                 config.localStore_io.prefix = strdup(config.http_io.prefix);
                 config.localStore_io.readOnly =  config.fuse_ops.read_only;
                 if((cb = local_io_create(&config.localStore_io, NULL)) == NULL)
-                    err(1, "local_io_create");
+                    err(errno, "local_io_create");
             }
 
             /* check if device can be used */
@@ -1735,7 +1735,7 @@ validate_config(void)
 
         /* Create temporary lower layer */
         if ((temp_store = config.test ? test_io_create(&config.http_io) : http_io_create(&config.http_io)) == NULL)
-            err(1, config.test ? "test_io_create" : "http_io_create");
+            err(errno, config.test ? "test_io_create" : "http_io_create");
 
         /* Initialize bitmap */
         nwords = (config.num_blocks + (sizeof(*lb.bitmap) * 8) - 1) / (sizeof(*lb.bitmap) * 8);

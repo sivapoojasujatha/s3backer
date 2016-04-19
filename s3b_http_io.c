@@ -148,7 +148,8 @@ http_io_add_auth2(struct http_io_private *priv, struct http_io *const io, time_t
     }
     if ((amz_hdrs = malloc(num_amz_hdrs * sizeof(*amz_hdrs))) == NULL) {
         r = errno;
-        goto fail;
+	HMAC_CTX_cleanup(&hmac_ctx);
+	return r;
     }
     for (header = io->headers, i = 0; header != NULL; header = header->next) {
         if (strncmp(header->data, "x-amz", 5) == 0)
@@ -160,6 +161,9 @@ http_io_add_auth2(struct http_io_private *priv, struct http_io *const io, time_t
     /* Sign x-amz headers (in sorted order) */
     for (i = 0; i < num_amz_hdrs; i++)
         update_hmac_from_header(&hmac_ctx, io, amz_hdrs[i], 0, sigbuf, sizeof(sigbuf));
+
+    /* Clean up the temp struct */
+    free(amz_hdrs);
 
     /* Get resource */
     resource = config->vhost ? io->url + strlen(config->baseURL) - 1 : io->url + strlen(config->baseURL) + strlen(config->bucket);
@@ -192,14 +196,7 @@ http_io_add_auth2(struct http_io_private *priv, struct http_io *const io, time_t
     io->headers = http_io_add_header(io->headers, "%s: AWS %s:%s", AUTH_HEADER, access_id, authbuf);
 
     /* Done */
-    r = 0;
-
-fail:
-    /* Clean up */
-    if (amz_hdrs != NULL)
-        free(amz_hdrs);
-    HMAC_CTX_cleanup(&hmac_ctx);
-    return r;
+    return 0;
 }
 
 /* AWS verison 4 authentication */
@@ -241,7 +238,7 @@ http_io_add_auth4(struct http_io_private *priv, struct http_io *const io, time_t
     char *p;
     int r;
     int i;
- /* Initialize */
+    /* Initialize */
     EVP_MD_CTX_init(&hash_ctx);
     HMAC_CTX_init(&hmac_ctx);
 
@@ -272,8 +269,7 @@ http_io_add_auth4(struct http_io_private *priv, struct http_io *const io, time_t
     /* Format date */
     strftime(datebuf, sizeof(datebuf), AWS_DATE_BUF_FMT, gmtime_r(&now, &tm));
 
-/****** Hash Payload and Add Header ******/
-
+    /* Hash Payload and Add Header */
     EVP_DigestInit_ex(&hash_ctx, EVP_sha256(), NULL);
     if (payload != NULL)
         EVP_DigestUpdate(&hash_ctx, payload, plen);
@@ -282,13 +278,11 @@ http_io_add_auth4(struct http_io_private *priv, struct http_io *const io, time_t
 
     io->headers = http_io_add_header(io->headers, "%s: %s", S3B_CONTENT_SHA256_HEADER, payload_hash_buf);
 
-/****** Add IAM security token header (if any) ******/
-
+    /* Add IAM security token header (if any) */
     if (*iam_token != '\0')
         io->headers = http_io_add_header(io->headers, "%s: %s", S3B_SECURITY_TOKEN_HEADER, iam_token);
 
-/****** Create Hashed Canonical Request ******/
-
+    /* Create Hashed Canonical Request */
 #if DEBUG_AUTHENTICATION
     *sigbuf = '\0';
 #endif
@@ -363,7 +357,7 @@ http_io_add_auth4(struct http_io_private *priv, struct http_io *const io, time_t
 #if DEBUG_AUTHENTICATION
     snprintf(sigbuf + strlen(sigbuf), sizeof(sigbuf) - strlen(sigbuf), "\n");
 #endif
-  /* Signed headers */
+    /* Signed headers */
     if ((header_names = malloc(header_names_length)) == NULL) {
         r = errno;
         goto fail;
@@ -400,7 +394,7 @@ http_io_add_auth4(struct http_io_private *priv, struct http_io *const io, time_t
     (*config->log)(LOG_DEBUG, "auth: canonical request:\n%s", sigbuf);
     (*config->log)(LOG_DEBUG, "auth: canonical request hash = %s", creq_hash_buf);
 #endif
-/****** Derive Signing Key ******/
+    /* Derive Signing Key */
 
     /* Do nested HMAC's */
     HMAC_Init_ex(&hmac_ctx, access_key, strlen(access_key), EVP_sha256(), NULL);
@@ -435,8 +429,8 @@ http_io_add_auth4(struct http_io_private *priv, struct http_io *const io, time_t
     http_io_prhex(hmac_buf, hmac, hmac_len);
     (*config->log)(LOG_DEBUG, "auth: HMAC[%s] = %s", S3B_SIGNATURE_TERMINATOR, hmac_buf);
 #endif
-/****** Sign the String To Sign ******/
 
+    /* Sign the String To Sign */
 #if DEBUG_AUTHENTICATION
     *sigbuf = '\0';
 #endif
@@ -475,8 +469,7 @@ http_io_add_auth4(struct http_io_private *priv, struct http_io *const io, time_t
     (*config->log)(LOG_DEBUG, "auth: signature hmac = %s", hmac_buf);
 #endif
 
-/****** Add Authorization Header ******/
-
+    /* Add Authorization Header */
     io->headers = http_io_add_header(io->headers, "%s: %s Credential=%s/%.8s/%s/%s/%s, SignedHeaders=%s, Signature=%s",
       AUTH_HEADER, S3B_SIGNATURE_ALGORITHM, access_id, datebuf, config->region, S3B_SERVICE_NAME, S3B_SIGNATURE_TERMINATOR,
       header_names, hmac_buf);
@@ -485,10 +478,12 @@ http_io_add_auth4(struct http_io_private *priv, struct http_io *const io, time_t
     r = 0;
 
 fail:
-    /* Clean up */
-    if (sorted_hdrs != NULL)
+    /* Cleanup */
+    if (sorted_hdrs)
         free(sorted_hdrs);
-    free(header_names);
+    if (header_names)
+	free(header_names);
+
     EVP_MD_CTX_cleanup(&hash_ctx);
     HMAC_CTX_cleanup(&hmac_ctx);
     return r;

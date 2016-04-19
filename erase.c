@@ -71,6 +71,7 @@ cloudbacker_erase(struct cb_config *config)
         }
         if (strcasecmp(response, "y") != 0 && strcasecmp(response, "yes") != 0) {
             warnx("not confirmed");
+	    r = 0;
             goto fail0;
         }
     }
@@ -153,6 +154,7 @@ fail2:
 fail1:
     pthread_mutex_destroy(&priv->mutex);
 fail0:
+    errno = r;
     return ok ? 0 : -1;
 }
 

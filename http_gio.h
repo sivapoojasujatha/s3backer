@@ -70,7 +70,7 @@
 #define MOUNTED_FLAG                    "cloudbacker-mounted"
 
 /* zero filled meta data block name */
-#define ZERO_FILLED_META_DATA_BLOCK     "cloudbacker-zerosize-metadata"
+#define META_DATA_BLOCK                 "cloudbacker-zerosize-metadata"
  
 /* MIME type for blocks */
 #define CONTENT_TYPE                    "application/x-cloudbacker-block"
@@ -384,6 +384,7 @@ void http_io_release_curl(struct http_io_private *priv, CURL **curlp, int may_ca
 
 /* encoding, encryption, parsing etc utility functions */
 void http_io_base64_encode(char *buf, size_t bufsiz, const void *data, size_t len);
+void http_io_base64_encode_safe(char *buf, size_t bufsiz, const void *data, size_t len);
 void update_hmac_from_header(HMAC_CTX *ctx, struct http_io *io,
   const char *name, int value_only, char *sigbuf, size_t sigbuflen);
 u_int http_io_crypt(struct http_io_private *priv, cb_block_t block_num, int enc, const u_char *src, u_int len, u_char *dst);
