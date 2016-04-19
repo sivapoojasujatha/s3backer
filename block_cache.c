@@ -1311,10 +1311,17 @@ static struct cache_entry *
 block_cache_verified(struct block_cache_private *priv, struct cache_entry *entry)
 {
     struct cache_entry *new_entry;
+    int in_list = 0;
 
     /* Sanity check */
     assert(entry->verify);
     assert(ENTRY_GET_STATE(entry) == CLEAN2 || ENTRY_GET_STATE(entry) == READING2);
+
+    /* Take off the list before reallocating */
+    if (ENTRY_IN_LIST(entry)) {
+        TAILQ_REMOVE(&priv->cleans, entry, link);
+	in_list = 1;
+    }
 
     /* Give back some memory; if we can't no big deal */
     if ((new_entry = realloc(entry, sizeof(*entry))) == NULL)
@@ -1322,10 +1329,12 @@ block_cache_verified(struct block_cache_private *priv, struct cache_entry *entry
 
     /* Update all references that point to the entry */
     cb_hash_put(priv->hashtable, new_entry);
-    if (ENTRY_IN_LIST(entry)) {
-        TAILQ_REMOVE(&priv->cleans, entry, link);
+
+    /* Put back on the list if it was on one */
+    if (in_list) {
         TAILQ_INSERT_TAIL(&priv->cleans, new_entry, link);
     }
+
     entry = new_entry;
 
 done:

@@ -97,9 +97,7 @@ int update_gcs_credentials(struct http_io_private *const priv)
     struct http_io_conf *const config = priv->config;
     struct http_io io;
     char buf[2048] = { '\0' };
-    char *gs_clientId = config->auth.u.gs.clientId;
     char *gs_accesstoken =  NULL;
-    char *gs_p12Key_file = config->auth.u.gs.secret_keyfile;
     char urlbuf[256] = GCS_AUTHENTICATION_URL;
     size_t buflen;
     int r = 0;
@@ -132,6 +130,7 @@ int update_gcs_credentials(struct http_io_private *const priv)
 		       io.url, strerror(r));
 	return r;
     }
+    free(io.post_data);
 
     /* Determine how many bytes we read */
     buflen = io.buf_size - io.bufs.rdremain;
@@ -140,19 +139,22 @@ int update_gcs_credentials(struct http_io_private *const priv)
     buf[buflen] = '\0';
 
     /* Find access token in JSON response */
-    if ((gs_accesstoken = parse_json_field(priv, buf, GCS_OAUTH2_ACCESS_TOKEN)) == NULL){
+    if ((gs_accesstoken = parse_json_field(priv, buf, GCS_OAUTH2_ACCESS_TOKEN)) == NULL) {
         (*config->log)(LOG_ERR, "failed to extract GCS access token from response: %s", strerror(errno));
-        free(gs_accesstoken);
         return EINVAL;
     }
+
     /* Update credentials */
     pthread_mutex_lock(&priv->mutex);
-    free(io.post_data);
-    config->auth.u.gs.clientId = gs_clientId;
-    config->auth.u.gs.secret_keyfile = gs_p12Key_file;
-    config->auth.u.gs.auth_token = gs_accesstoken;
+    if (config->auth.u.gs.auth_token) {
+	free(config->auth.u.gs.auth_token);
+	config->auth.u.gs.auth_token = gs_accesstoken;
+    } else {
+	config->auth.u.gs.clientId = config->auth.u.gs.clientId;
+	config->auth.u.gs.secret_keyfile = config->auth.u.gs.secret_keyfile;
+	config->auth.u.gs.auth_token = gs_accesstoken;
+    }
     pthread_mutex_unlock(&priv->mutex);
-    
     (*config->log)(LOG_INFO, "successfully updated GCS authentication credentials %s", io.url);
  
     /* Done */
