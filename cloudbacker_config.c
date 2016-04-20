@@ -56,7 +56,8 @@
 #define CLOUDBACKER_DEFAULT_READ_AHEAD                 4
 #define CLOUDBACKER_DEFAULT_READ_AHEAD_TRIGGER         2
 #define CLOUDBACKER_DEFAULT_COMPRESSION                Z_NO_COMPRESSION
-#define CLOUDBACKER_DEFAULT_ENCRYPTION                 "AES-128-CBC"
+#define CLOUDBACKER_DEFAULT_CS_ENCRYPTION              "AES-128-CBC"   // default client side encryption algorithm 
+#define CLOUDBACKER_DEFAULT_SS_ENCRYPTION              "AES256"        // default server side encryption algorithm
 
 
 /* Storage bucket prefix */
@@ -438,6 +439,16 @@ static const struct fuse_opt option_list[] = {
     {
         .templ=     "--storageClass=%s",
         .offset=    offsetof(struct cb_config, http_io.storageClass),        
+    },
+    {
+        .templ=     "--cse",
+        .offset=    offsetof(struct cb_config, http_io.cse),
+        .value=     1
+    },
+    {
+        .templ=     "--sse",
+        .offset=    offsetof(struct cb_config, http_io.sse),
+        .value=     1
     },
     {
         .templ=     "--ssl",
@@ -1093,6 +1104,19 @@ validate_config(void)
         }
     }
 
+    if(config.http_io.cse && config.http_io.sse) {
+       warnx("illegal flags, use either of '--cse' or '--sse' flags.");
+       return -1;
+    }
+
+     /* By default sse should be enabled, if user specifies --cse flag, then disable --sse flag */
+    if(!config.http_io.cse) {
+        config.http_io.sse = 1;
+        config.encrypt = 1;        /* to use default encryption cipher */
+        if(config.http_io.encryption == NULL)
+           config.http_io.encryption = strdup(CLOUDBACKER_DEFAULT_SS_ENCRYPTION);
+    }
+    
     /* Set default or custom region */
     if (config.http_io.region == NULL)
         config.http_io.region = S3BACKER_DEFAULT_REGION;
@@ -1123,10 +1147,6 @@ validate_config(void)
     }
     if (s == NULL) {
         warnx("invalid base URL `%s'", config.http_io.baseURL);
-        return -1;
-    }
-    if (config.ssl && customBaseURL && strncmp(config.http_io.baseURL, "https", 5) != 0) {
-        warnx("non-SSL `--baseURL' conflicts with `--ssl'");
         return -1;
     }
 
@@ -1174,99 +1194,111 @@ validate_config(void)
         return -1;
     }
 
-    /* Apply default encryption */
-    if (config.http_io.encryption == NULL && config.encrypt)
-        config.http_io.encryption = strdup(CLOUDBACKER_DEFAULT_ENCRYPTION);
-
-    /* Uppercase encryption name for consistency */
-    if (config.http_io.encryption != NULL) {
-        char *t;
-
-        if ((t = strdup(config.http_io.encryption)) == NULL)
-            err(1, "strdup()");
-        for (i = 0; t[i] != '\0'; i++)
-            t[i] = toupper(t[i]);
-        config.http_io.encryption = t;
-    }
-
-    /* Check encryption and get key */
-    if (config.http_io.encryption != NULL) {
-        char pwbuf[1024];
-        FILE *fp;
-
-        if (config.password_file != NULL && config.http_io.password != NULL) {
-            warnx("specify only one of `--password' or `--passwordFile'");
-            return -1;
+    if(config.http_io.cse) {
+        /* --encrypt flag is mandatory with --cse */
+        if (!config.encrypt ){
+            warnx("--encrypt flag is not specified, using default encryption cipher '%s'", CLOUDBACKER_DEFAULT_CS_ENCRYPTION);
+            config.encrypt = 1;
         }
-        if (config.password_file == NULL && config.http_io.password == NULL) {
-            if ((s = getpass("Password: ")) == NULL)
-                err(1, "getpass()");
+        /* Apply default encryption */
+        if (config.http_io.encryption == NULL && config.encrypt )
+            config.http_io.encryption = strdup(CLOUDBACKER_DEFAULT_CS_ENCRYPTION);
+
+        /* Uppercase encryption name for consistency */
+        if (config.http_io.encryption != NULL) {
+            char *t;
+
+            if ((t = strdup(config.http_io.encryption)) == NULL)
+                err(1, "strdup()");
+            for (i = 0; t[i] != '\0'; i++)
+                t[i] = toupper(t[i]);
+            config.http_io.encryption = t;
         }
-        if (config.password_file != NULL) {
-            assert(config.http_io.password == NULL);
-            if ((fp = fopen(config.password_file, "r")) == NULL) {
-                warn("can't open encryption key file `%s'", config.password_file);
+
+        /* Check encryption and get key */
+        if (config.http_io.encryption != NULL) {
+            char pwbuf[1024];
+            FILE *fp;
+
+            if (config.password_file != NULL && config.http_io.password != NULL) {
+                warnx("specify only one of `--password' or `--passwordFile'");
                 return -1;
             }
-            if (fgets(pwbuf, sizeof(pwbuf), fp) == NULL || *pwbuf == '\0') {
-                warnx("can't read encryption key from file `%s'", config.password_file);
+            if (config.password_file == NULL && config.http_io.password == NULL) {
+                if ((s = getpass("Password: ")) == NULL)
+                    err(1, "getpass()");
+            }
+            if (config.password_file != NULL) {
+                assert(config.http_io.password == NULL);
+                if ((fp = fopen(config.password_file, "r")) == NULL) {
+                    warn("can't open encryption key file `%s'", config.password_file);
+                    return -1;
+                }
+                if (fgets(pwbuf, sizeof(pwbuf), fp) == NULL || *pwbuf == '\0') {
+                    warnx("can't read encryption key from file `%s'", config.password_file);
+                    fclose(fp);
+                    return -1;
+                }
+                if (pwbuf[strlen(pwbuf) - 1] == '\n')
+                    pwbuf[strlen(pwbuf) - 1] = '\0';
                 fclose(fp);
+                s = pwbuf;
+           }
+           if (config.http_io.password == NULL && (config.http_io.password = strdup(s)) == NULL)
+                err(1, "strdup()");
+           if (config.http_io.key_length > EVP_MAX_KEY_LENGTH) {
+                warnx("`--keyLength' value must be positive and at most %u", EVP_MAX_KEY_LENGTH);
                 return -1;
-            }
-            if (pwbuf[strlen(pwbuf) - 1] == '\n')
-                pwbuf[strlen(pwbuf) - 1] = '\0';
-            fclose(fp);
-            s = pwbuf;
-        }
-        if (config.http_io.password == NULL && (config.http_io.password = strdup(s)) == NULL)
-            err(1, "strdup()");
-        if (config.http_io.key_length > EVP_MAX_KEY_LENGTH) {
-            warnx("`--keyLength' value must be positive and at most %u", EVP_MAX_KEY_LENGTH);
-            return -1;
-        }
-    } else {
-        if (config.http_io.password != NULL)
-            warnx("unexpected flag `%s' (`--encrypt' was not specified)", "--password");
-        else if (config.password_file != NULL)
-            warnx("unexpected flag `%s' (`--encrypt' was not specified)", "--passwordFile");
-        if (config.http_io.key_length != 0)
-            warnx("unexpected flag `%s' (`--encrypt' was not specified)", "--keyLength");
+           }
+       } else {
+            if (config.http_io.password != NULL)
+                warnx("unexpected flag `%s' (`--encrypt' was not specified)", "--password");
+            else if (config.password_file != NULL)
+                warnx("unexpected flag `%s' (`--encrypt' was not specified)", "--passwordFile");
+            if (config.http_io.key_length != 0)
+                warnx("unexpected flag `%s' (`--encrypt' was not specified)", "--keyLength");
+       }
+
+       /* We always want to compress if we are encrypting */
+       if (config.http_io.encryption != NULL && config.http_io.compress == Z_NO_COMPRESSION)
+           config.http_io.compress = Z_DEFAULT_COMPRESSION;
+
+       /* Check compression level */
+       switch (config.http_io.compress) {
+           case Z_DEFAULT_COMPRESSION:
+           case Z_NO_COMPRESSION:
+               break;
+           default:
+               if (config.http_io.compress < Z_BEST_SPEED || config.http_io.compress > Z_BEST_COMPRESSION) {
+                   warnx("illegal compression level `%d'", config.http_io.compress);
+                   return -1;
+               }
+               break;
+       }  
+   }
+
+    if ((config.ssl || config.http_io.sse) && customBaseURL && strncmp(config.http_io.baseURL, "https", 5) != 0) {
+        warnx("'--baseURL' conflicts with %s", (config.ssl ? "--ssl" : (config.http_io.sse ? "--sse" : "")));
+        return -1;
     }
 
-    /* We always want to compress if we are encrypting */
-    if (config.http_io.encryption != NULL && config.http_io.compress == Z_NO_COMPRESSION)
-        config.http_io.compress = Z_DEFAULT_COMPRESSION;
-
-    /* Check compression level */
-    switch (config.http_io.compress) {
-    case Z_DEFAULT_COMPRESSION:
-    case Z_NO_COMPRESSION:
-        break;
-    default:
-        if (config.http_io.compress < Z_BEST_SPEED || config.http_io.compress > Z_BEST_COMPRESSION) {
-            warnx("illegal compression level `%d'", config.http_io.compress);
-            return -1;
-        }
-        break;
-    }
-
-    /* Disable md5 cache when in read only mode */
-    if (config.fuse_ops.read_only) {
+   /* Disable md5 cache when in read only mode */
+   if (config.fuse_ops.read_only) {
         config.ec_protect.cache_size = 0;
         config.ec_protect.cache_time = 0;
         config.ec_protect.min_write_delay = 0;
-    }
+   }
 
-    /* Check time/cache values */
-    if (config.ec_protect.cache_size == 0 && config.ec_protect.cache_time > 0) {
-        warnx("`md5CacheTime' must zero when MD5 cache is disabled");
-        return -1;
-    }
-    if (config.ec_protect.cache_size == 0 && config.ec_protect.min_write_delay > 0) {
-        warnx("`minWriteDelay' must zero when MD5 cache is disabled");
-        return -1;
-    }
-    if (config.ec_protect.cache_time > 0
+   /* Check time/cache values */
+   if (config.ec_protect.cache_size == 0 && config.ec_protect.cache_time > 0) {
+       warnx("`md5CacheTime' must zero when MD5 cache is disabled");
+       return -1;
+   }
+   if (config.ec_protect.cache_size == 0 && config.ec_protect.min_write_delay > 0) {
+       warnx("`minWriteDelay' must zero when MD5 cache is disabled");
+       return -1;
+   }
+   if (config.ec_protect.cache_time > 0
       && config.ec_protect.cache_time < config.ec_protect.min_write_delay) {
         warnx("`md5CacheTime' must be at least `minWriteDelay'");
         return -1;
@@ -1378,7 +1410,7 @@ validate_config(void)
         }
 
         /* Check block size vs. encryption block size */
-        if (config.http_io.encryption != NULL && config.block_size % EVP_MAX_IV_LENGTH != 0) {
+        if (config.http_io.cse && config.http_io.encryption != NULL && config.block_size % EVP_MAX_IV_LENGTH != 0) {
             warnx("block size must be at least %u when encryption is enabled", EVP_MAX_IV_LENGTH);
             return -1;
         }
@@ -1391,11 +1423,10 @@ validate_config(void)
     config.http_io.http_metadata.num_blocks = config.num_blocks;
     config.http_io.http_metadata.name_hash = config.http_io.name_hash;
     config.http_io.http_metadata.compression_level = config.http_io.compress;
-    config.http_io.http_metadata.is_encrypted = config.encrypt;
+    config.http_io.http_metadata.is_cs_encrypted = config.http_io.cse;
     if( config.http_io.encryption != NULL || config.encrypt){
         config.http_io.http_metadata.encryption_cipher = NULL;
         config.http_io.http_metadata.encryption_cipher = strdup(config.http_io.encryption);
-        config.http_io.http_metadata.is_encrypted = 1;
         /* --encrypt flag,implies --compress flag */
         config.http_io.http_metadata.compression_level = config.http_io.compress;
     }
@@ -1434,10 +1465,11 @@ validate_config(void)
 
         if (!config.quiet){
             warnx("auto-detection successful");
-            warnx("block size=%s, total size=%s, name hashing='%s', encryption cipher=%s and compression level='%d'%s",
-		  blockSizeBuf, fileSizeBuf, config.http_io.http_metadata.name_hash ? "yes" : "no", (config.http_io.http_metadata.is_encrypted ? 
-                  (config.http_io.http_metadata.encryption_cipher == NULL ? "(none)" : config.http_io.http_metadata.encryption_cipher) : "(none)"),
-                  config.http_io.http_metadata.compression_level,config.http_io.http_metadata.compression_level == Z_DEFAULT_COMPRESSION ? "(default)" : "");
+            warnx("block size=%s, total size=%s, name hashing='%s', %s with cipher=%s and compression level='%d'%s",
+                blockSizeBuf, fileSizeBuf, config.http_io.http_metadata.name_hash ? "yes" : "no", config.http_io.http_metadata.is_cs_encrypted ? 
+                "client side encryption" : "server side encryption", (config.http_io.http_metadata.encryption_cipher == NULL ? "(none)" : 
+                config.http_io.http_metadata.encryption_cipher), config.http_io.http_metadata.compression_level,
+                config.http_io.http_metadata.compression_level == Z_DEFAULT_COMPRESSION ? "(default)" : "");
         }
         
         /* compare block size */
@@ -1489,6 +1521,15 @@ validate_config(void)
 	                config.http_io.name_hash ? "yes" : "no", config.http_io.http_metadata.name_hash ? "yes" : "no");
             }
         }
+
+        if(config.http_io.sse && config.http_io.http_metadata.is_cs_encrypted)
+            errx(1, "error: configured server side encryption, but filesystem is having client side encryption with %s cipher",
+                     config.http_io.http_metadata.encryption_cipher);
+
+         if(config.http_io.cse && !config.http_io.http_metadata.is_cs_encrypted)
+            errx(1, "error: configured client side encryption, but filesystem is having server side side encryption");
+
+            
         /* compare compression flag */
         if (config.http_io.compress == Z_NO_COMPRESSION)
             config.http_io.compress = config.http_io.http_metadata.compression_level;
@@ -1506,13 +1547,13 @@ validate_config(void)
                         config.http_io.http_metadata.compression_level == Z_DEFAULT_COMPRESSION ? "(default)" : "");
        }
        /* compare encryption cipher flag */
-       if (config.http_io.encryption == NULL && config.http_io.http_metadata.is_encrypted) {
-            config.encrypt= config.http_io.http_metadata.is_encrypted;
+       if (config.http_io.encryption == NULL && config.http_io.http_metadata.is_cs_encrypted) {
+            config.encrypt= config.http_io.http_metadata.is_cs_encrypted;
             config.http_io.encryption = strdup(config.http_io.http_metadata.encryption_cipher);
             if( config.http_io.password == NULL)
                 errx(1, "encryption password cannot be empty as file system is encrypted,\nplease specify '--encrypt' flag and provide encryption passsword using respective flag or when prompted");
         } 
-        else if(config.http_io.http_metadata.is_encrypted) {
+        else if(config.http_io.http_metadata.is_cs_encrypted) {
             if( strcmp(config.http_io.http_metadata.encryption_cipher, config.http_io.encryption) != 0){     
         
                 if (config.force) {
@@ -1881,7 +1922,8 @@ dump_config(void)
     (*config.log)(LOG_DEBUG, "%24s: 0%o", "file_mode", config.fuse_ops.file_mode);
     (*config.log)(LOG_DEBUG, "%24s: %s", "read_only", config.fuse_ops.read_only ? "true" : "false");
     (*config.log)(LOG_DEBUG, "%24s: %d", "compress", config.http_io.compress);
-    (*config.log)(LOG_DEBUG, "%24s: %s", "encryption", config.http_io.encryption != NULL ? config.http_io.encryption : "(none)");
+    (*config.log)(LOG_DEBUG, "%24s: %s (%s)", "encryption ", config.http_io.encryption != NULL ? config.http_io.encryption : "(none)", 
+                                         config.http_io.cse ? "client side encryption" : "server side encryption");
     (*config.log)(LOG_DEBUG, "%24s: %u", "key_length", config.http_io.key_length);
     (*config.log)(LOG_DEBUG, "%24s: \"%s\"", "password", config.http_io.password != NULL ? "****" : "");
     (*config.log)(LOG_DEBUG, "%24s: %s bps (%ju)", "max_upload",
@@ -2062,6 +2104,8 @@ usage(void)
         fprintf(stderr, "%s%s", i > 0 ? ", " : "  ", s3_storageClasses[i]);
     fprintf(stderr, "\n");
     fprintf(stderr, "\t--%-27s %s\n", "size=SIZE", "File size (with optional suffix 'K', 'M', 'G', etc.)");
+    fprintf(stderr, "\t--%-27s %s\n", "cse", "Enable client side encryption");
+    fprintf(stderr, "\t--%-27s %s\n", "sse", "Enable server side encryption");
     fprintf(stderr, "\t--%-27s %s\n", "ssl", "Enable SSL");
     fprintf(stderr, "\t--%-27s %s\n", "statsFilename=NAME", "Name of statistics file in filesystem");
     fprintf(stderr, "\t--%-27s %s\n", "test", "Run in local test mode (bucket is a directory)");
@@ -2346,9 +2390,9 @@ int set_s3_urlbuf(void)
     const int customRegion = config.http_io.region != NULL;
     char urlbuf[512];
     if (customRegion && strcmp(config.http_io.region, S3BACKER_DEFAULT_REGION) != 0)
-        snprintf(urlbuf, sizeof(urlbuf), "http%s://s3-%s.%s/", config.ssl ? "s" : "", config.http_io.region, S3_DOMAIN);
+        snprintf(urlbuf, sizeof(urlbuf), "http%s://s3-%s.%s/", (config.ssl || config.http_io.sse) ? "s" : "", config.http_io.region, S3_DOMAIN);
     else
-        snprintf(urlbuf, sizeof(urlbuf), "http%s://s3.%s/", config.ssl ? "s" : "", S3_DOMAIN);
+        snprintf(urlbuf, sizeof(urlbuf), "http%s://s3.%s/", (config.ssl || config.http_io.sse) ? "s" : "", S3_DOMAIN);
 
     if ((config.http_io.baseURL = strdup(urlbuf)) == NULL) {
         warn("malloc");

@@ -60,6 +60,9 @@ void set_http_io_s3b_params(struct http_io_conf *config)
         strcpy(config->http_io_params->date_header,  AWS_DATE_HEADER);
         strcpy(config->http_io_params->date_buf_fmt, AWS_DATE_BUF_FMT);
     }
+    if(config->sse){
+       strcpy(config->http_io_params->serverside_encryption_header, S3B_SS_ENCRYPT_HEADER);
+    }
     strcpy(config->http_io_params->signature_algorithm,S3B_SIGNATURE_ALGORITHM);
     strcpy(config->http_io_params->accessKey_prefix, S3B_ACCESS_KEY_PREFIX);
     strcpy(config->http_io_params->service_name, S3B_SERVICE_NAME);

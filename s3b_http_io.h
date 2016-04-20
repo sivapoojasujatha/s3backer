@@ -55,6 +55,9 @@
 #define S3B_CONTENT_SHA256_HEADER       "x-amz-content-sha256"
 #define S3B_STORAGE_CLASS_HEADER        "x-amz-storage-class"
 
+/* s3 - server side encryption headers */
+#define S3B_SS_ENCRYPT_HEADER           "x-amz-server-side-encryption" 
+
 /* AWS 4 `Date' and `x-amz-date' header formats */
 #define AWS_DATE_HEADER                 "x-amz-date"
 #define AWS_DATE_BUF_FMT                "%Y%m%dT%H%M%SZ"

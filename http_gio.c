@@ -237,7 +237,7 @@ http_io_create(struct http_io_conf *config)
     CRYPTO_set_id_callback(http_io_openssl_ider);
 
     /* Initialize encryption */
-    if (config->encryption != NULL) {
+    if (config->encryption != NULL && config->cse) {
         char saltbuf[strlen(config->bucket) + 1 + strlen(config->prefix) + 1];
         u_int cipher_key_len;
 
@@ -703,9 +703,9 @@ void encryption_parser(char *buf, struct http_io *io)
                 char pbuf[8];
                 if (sscanf(token,  "%s", pbuf)) {
                     if (strncmp(pbuf, "yes", sizeof("yes")) == 0)
-                        io->is_encrypted = 1;
+                        io->is_cs_encrypted = 1;
                      else
-                        io->is_encrypted = 0;
+                        io->is_cs_encrypted = 0;
                 }
             }
         }
@@ -864,8 +864,8 @@ http_io_meta_data(struct cloudbacker_store *cb)
     config->http_metadata.block_size = io.block_size;
     config->http_metadata.name_hash = io.name_hash;
     config->http_metadata.compression_level = io.compression_level;
-    config->http_metadata.is_encrypted = io.is_encrypted;
-    if(config->http_metadata.is_encrypted)
+    config->http_metadata.is_cs_encrypted = io.is_cs_encrypted;
+    if(io.encryption_cipher != NULL)
         config->http_metadata.encryption_cipher = strdup(io.encryption_cipher);
 
 done:
@@ -1114,7 +1114,7 @@ http_io_read_block(struct cloudbacker_store *const cb, cb_block_t block_num, voi
             goto bad_encoding;
 
         /* Check for encryption (which must have been applied after compression) */
-        if (strncasecmp(layer, CONTENT_ENCODING_ENCRYPT "-", sizeof(CONTENT_ENCODING_ENCRYPT)) == 0) {
+        if (strncasecmp(layer, CONTENT_ENCODING_ENCRYPT "-", sizeof(CONTENT_ENCODING_ENCRYPT)) == 0 && config->cse) {
             const char *const block_cipher = layer + sizeof(CONTENT_ENCODING_ENCRYPT);
             u_char hmac[SHA_DIGEST_LENGTH];
             u_char *buf;
@@ -1215,7 +1215,7 @@ bad_encoding:
     }
 
     /* Check for required encryption */
-    if (r == 0 && config->encryption != NULL && !encrypted) {
+    if (r == 0 && config->encryption != NULL && !encrypted && config->cse) {
         (*config->log)(LOG_ERR, "block %0*jx was supposed to be encrypted but wasn't", CB_BLOCK_NUM_DIGITS, (uintmax_t)block_num);
         r = EIO;
     }
@@ -1352,7 +1352,7 @@ http_io_set_meta_data(struct cloudbacker_store *cb, int operation)
     io.headers = http_io_add_header(io.headers, "%s: %s", priv->config->http_io_params->name_hash_header, config->http_metadata.name_hash ? "yes" : "no");
 
 
-    io.headers = http_io_add_header(io.headers, "%s: %s", priv->config->http_io_params->encrypted_header, config->http_metadata.is_encrypted ? "yes" : "no");
+    io.headers = http_io_add_header(io.headers, "%s: %s", priv->config->http_io_params->encrypted_header, config->http_metadata.is_cs_encrypted ? "yes" : "no");
 
     if(config->http_metadata.encryption_cipher != NULL)
         io.headers = http_io_add_header(io.headers, "%s: %s", priv->config->http_io_params->encryption_cipher_header, 
@@ -1484,7 +1484,7 @@ http_io_write_block(struct cloudbacker_store *const cb, cb_block_t block_num, co
     }
 
     /* Encrypt data if desired */
-    if (src != NULL && config->encryption != NULL) {
+    if (src != NULL && config->encryption != NULL && config->cse) {
         void *encrypt_buf;
         u_int encrypt_len;
 
@@ -1542,6 +1542,10 @@ http_io_write_block(struct cloudbacker_store *const cb, cb_block_t block_num, co
     /* Add Date header */
     http_io_add_date(priv, &io, now);
 
+    /* Add SSE header for s3 storage. Nothing to do for google storage*/
+    if(config->sse && config->storage_prefix == S3_STORAGE)
+        io.headers = http_io_add_header(io.headers, "%s: %s",priv->config->http_io_params->serverside_encryption_header, config->encryption);
+
     /* Add PUT-only headers */
     if (src != NULL) {
 
@@ -1558,7 +1562,7 @@ http_io_write_block(struct cloudbacker_store *const cb, cb_block_t block_num, co
         io.headers = http_io_add_header(io.headers, "%s: %s", priv->config->http_io_params->acl_header,priv->config->http_io_params->acl_headerval);
 
     /* Add signature header (if encrypting) */
-    if (src != NULL && config->encryption != NULL)
+    if (src != NULL && (config->encryption != NULL && config->cse))
         io.headers = http_io_add_header(io.headers, "%s: \"%s\"", priv->config->http_io_params->HMAC_Header, hmacbuf);
 
     /* Add storage class header (if needed) */

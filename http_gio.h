@@ -265,7 +265,7 @@ struct http_io {
     u_int               block_size;             // block size from "x-[amz]/[goog]-meta-*backer-blocksize"
     u_int               name_hash;              // object name hashing from "x-[amz]/[goog]-meta-*backer-namehash"
     u_int               compression_level;      // if compression is used or not "x-[amz]/[goog]-meta-*backer-compression_level"   
-    u_int               is_encrypted;           // if encrypt flag is used or not "x-[amz]/[goog]-meta-*backer-encryption" 
+    u_int               is_cs_encrypted;        // if encrypt flag is used or not "x-[amz]/[goog]-meta-*backer-encryption" 
     char                *encryption_cipher;     // encryption cipher used  "x-[amz]/[goog]-meta-*backer-encryption-cipher"
     u_int               expect_304;             // a verify request; expect a 304 response
     u_char              md5[MD5_DIGEST_LENGTH]; // parsed ETag header
@@ -284,7 +284,7 @@ struct http_io_meta_data {
     uintmax_t                   file_size;
     off_t                       num_blocks;
     u_int                       compression_level;
-    u_int                       is_encrypted;
+    u_int                       is_cs_encrypted;    
     char                        *encryption_cipher;
 };
 
@@ -315,6 +315,8 @@ struct http_io_conf {
     int                 debug_http;
     int                 quiet;
     int                 compress;                   // zlib compression level
+    int                 cse;                        // client side encryption
+    int                 sse;                        // server side encryption
     int                 vhost;                      // use virtual host style URL
     int                 storage_prefix;             // GS_STORAGE or S3_STORAGE
     u_int               *nonzero_bitmap;            // is set to NULL by http_io_create()
