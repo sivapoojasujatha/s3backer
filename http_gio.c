@@ -1542,12 +1542,13 @@ http_io_write_block(struct cloudbacker_store *const cb, cb_block_t block_num, co
     /* Add Date header */
     http_io_add_date(priv, &io, now);
 
-    /* Add SSE header for s3 storage. Nothing to do for google storage*/
-    if(config->sse && config->storage_prefix == S3_STORAGE)
-        io.headers = http_io_add_header(io.headers, "%s: %s",priv->config->http_io_params->serverside_encryption_header, config->encryption);
-
-    /* Add PUT-only headers */
+     /* Add PUT-only headers */
     if (src != NULL) {
+
+        /* Add SSE header for s3 storage. Nothing to do for google storage*/
+        /* this header is applicable only for PUT and GET operations */
+        if(config->sse && config->storage_prefix == S3_STORAGE)
+            io.headers = http_io_add_header(io.headers, "%s: %s",priv->config->http_io_params->serverside_encryption_header, config->encryption);
 
         /* Add Content-Type header */
         io.headers = http_io_add_header(io.headers, "%s: %s", CTYPE_HEADER, CONTENT_TYPE);
@@ -1555,19 +1556,19 @@ http_io_write_block(struct cloudbacker_store *const cb, cb_block_t block_num, co
         /* Add Content-MD5 header */
         http_io_base64_encode(md5buf, sizeof(md5buf), md5, MD5_DIGEST_LENGTH);
         io.headers = http_io_add_header(io.headers, "%s: %s", MD5_HEADER, md5buf);
-    }
 
-    /* Add ACL header (PUT only) */
-    if (src != NULL)
+        /* Add ACL header (PUT only) */
         io.headers = http_io_add_header(io.headers, "%s: %s", priv->config->http_io_params->acl_header,priv->config->http_io_params->acl_headerval);
 
-    /* Add signature header (if encrypting) */
-    if (src != NULL && (config->encryption != NULL && config->cse))
-        io.headers = http_io_add_header(io.headers, "%s: \"%s\"", priv->config->http_io_params->HMAC_Header, hmacbuf);
+        /* Add signature header (if encrypting) */
+        if (config->encryption != NULL && config->cse)
+            io.headers = http_io_add_header(io.headers, "%s: \"%s\"", priv->config->http_io_params->HMAC_Header, hmacbuf);
+    }
 
     /* Add storage class header (if needed) */
     if (strcasecmp(config->storageClass, SCLASS_S3_REDUCED_REDUNDANCY)==0){
-         io.headers = http_io_add_header(io.headers, "%s: %s", priv->config->http_io_params->storage_class_header, priv->config->http_io_params->storage_class_headerval);
+         io.headers = http_io_add_header(io.headers, "%s: %s", priv->config->http_io_params->storage_class_header,
+                                                               priv->config->http_io_params->storage_class_headerval);
     }
 
     /* Add Authorization header */

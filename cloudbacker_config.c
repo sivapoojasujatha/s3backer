@@ -1104,17 +1104,39 @@ validate_config(void)
         }
     }
 
+    /* Uppercase encryption name for consistency */
+    if (config.http_io.encryption != NULL) {
+        char *t;
+
+        if ((t = strdup(config.http_io.encryption)) == NULL)
+            err(1, "strdup()");
+        for (i = 0; t[i] != '\0'; i++)
+            t[i] = toupper(t[i]);
+        config.http_io.encryption = t;
+    }
+
+
     if(config.http_io.cse && config.http_io.sse) {
        warnx("illegal flags, use either of '--cse' or '--sse' flags.");
        return -1;
     }
 
      /* By default sse should be enabled, if user specifies --cse flag, then disable --sse flag */
-    if(!config.http_io.cse) {
+    if(!config.http_io.cse && config.http_io.storage_prefix == S3_STORAGE) {
         config.http_io.sse = 1;
         config.encrypt = 1;        /* to use default encryption cipher */
         if(config.http_io.encryption == NULL)
            config.http_io.encryption = strdup(CLOUDBACKER_DEFAULT_SS_ENCRYPTION);
+
+        if(strncasecmp(config.http_io.encryption, CLOUDBACKER_DEFAULT_SS_ENCRYPTION, strlen(CLOUDBACKER_DEFAULT_SS_ENCRYPTION)) != 0) {
+            warnx("invalid encryption cipher `%s', supported cipher is '%s'",config.http_io.encryption, CLOUDBACKER_DEFAULT_SS_ENCRYPTION);
+            return -1;
+        }
+    }
+
+    if(!config.http_io.cse && !config.http_io.sse && config.encrypt){
+        warnx("--encrypt flag should be specified with either '--cse' or '--sse' flags.");
+        return -1;
     }
     
     /* Set default or custom region */
@@ -1195,25 +1217,9 @@ validate_config(void)
     }
 
     if(config.http_io.cse) {
-        /* --encrypt flag is mandatory with --cse */
-        if (!config.encrypt ){
-            warnx("--encrypt flag is not specified, using default encryption cipher '%s'", CLOUDBACKER_DEFAULT_CS_ENCRYPTION);
-            config.encrypt = 1;
-        }
         /* Apply default encryption */
         if (config.http_io.encryption == NULL && config.encrypt )
             config.http_io.encryption = strdup(CLOUDBACKER_DEFAULT_CS_ENCRYPTION);
-
-        /* Uppercase encryption name for consistency */
-        if (config.http_io.encryption != NULL) {
-            char *t;
-
-            if ((t = strdup(config.http_io.encryption)) == NULL)
-                err(1, "strdup()");
-            for (i = 0; t[i] != '\0'; i++)
-                t[i] = toupper(t[i]);
-            config.http_io.encryption = t;
-        }
 
         /* Check encryption and get key */
         if (config.http_io.encryption != NULL) {
@@ -1465,11 +1471,26 @@ validate_config(void)
 
         if (!config.quiet){
             warnx("auto-detection successful");
-            warnx("block size=%s, total size=%s, name hashing='%s', %s with cipher=%s and compression level='%d'%s",
-                blockSizeBuf, fileSizeBuf, config.http_io.http_metadata.name_hash ? "yes" : "no", config.http_io.http_metadata.is_cs_encrypted ? 
-                "client side encryption" : "server side encryption", (config.http_io.http_metadata.encryption_cipher == NULL ? "(none)" : 
-                config.http_io.http_metadata.encryption_cipher), config.http_io.http_metadata.compression_level,
-                config.http_io.http_metadata.compression_level == Z_DEFAULT_COMPRESSION ? "(default)" : "");
+
+             char encryption_data[256];
+            if(config.http_io.storage_prefix == S3_STORAGE){
+                sprintf(encryption_data,"%s with cipher %s",
+                        config.http_io.http_metadata.is_cs_encrypted ? "client side encryption" : "server side encryption",
+                        config.http_io.http_metadata.encryption_cipher == NULL ? "(none)" : config.http_io.http_metadata.encryption_cipher);
+            }
+            else{
+                if(config.http_io.http_metadata.is_cs_encrypted)
+                     sprintf(encryption_data, "client side encryption with cipher %s",
+                          config.http_io.http_metadata.encryption_cipher == NULL ? "(none)" : config.http_io.http_metadata.encryption_cipher);
+                else
+                     sprintf(encryption_data,"%s", "server side encrypion is not applicable");
+            }
+
+            warnx("block size=%s, total size=%s, name hashing='%s', compression level='%d'%s and %s",
+                  blockSizeBuf, fileSizeBuf, config.http_io.http_metadata.name_hash ? "yes" : "no",
+                  config.http_io.http_metadata.compression_level, config.http_io.http_metadata.compression_level == Z_DEFAULT_COMPRESSION ? "(default)" : "",
+                  encryption_data);
+
         }
         
         /* compare block size */
@@ -1546,7 +1567,7 @@ validate_config(void)
                         config.http_io.compress == Z_DEFAULT_COMPRESSION ? "(default)" : "", config.http_io.http_metadata.compression_level,
                         config.http_io.http_metadata.compression_level == Z_DEFAULT_COMPRESSION ? "(default)" : "");
        }
-       /* compare encryption cipher flag */
+       /* compare encryption cipher flag */       
        if (config.http_io.encryption == NULL && config.http_io.http_metadata.is_cs_encrypted) {
             config.encrypt= config.http_io.http_metadata.is_cs_encrypted;
             config.http_io.encryption = strdup(config.http_io.http_metadata.encryption_cipher);
@@ -1589,10 +1610,25 @@ validate_config(void)
         }
         if (!config.quiet) {
             warnx("auto-detection %s", why);
-            warnx("using %s block size %s, file size %s, name hashing setting '%s', encryption cipher %s and compression level '%d'%s",
+            
+            char encryption_data[256];
+            if(config.http_io.storage_prefix == S3_STORAGE){
+                sprintf(encryption_data,"%s with cipher %s", config.http_io.cse ? "client side encryption" : "server side encryption",
+                     config.http_io.encryption == NULL ? "(none)" : config.http_io.encryption);
+            }
+            else{
+                if(config.http_io.cse)
+                     sprintf(encryption_data, "client side encryption with cipher %s",
+                          config.http_io.encryption == NULL ? "(none)" : config.http_io.encryption);
+                else
+                     sprintf(encryption_data,"%s", "server side encrypion is not applicable");
+            }
+
+            warnx("using %s block size %s, file size %s, name hashing setting '%s', compression level '%d'%s and %s",
                   config_block_size == 0 ? "default" : "configured", blockSizeBuf, fileSizeBuf,
-		  config.http_io.name_hash ? "yes" : "no", config.http_io.encryption == NULL ? "(none)" : config.http_io.encryption,
-                  config.http_io.compress, config.http_io.compress == Z_DEFAULT_COMPRESSION ? "(default)" : "");
+                  config.http_io.name_hash ? "yes" : "no", config.http_io.compress, config.http_io.compress == Z_DEFAULT_COMPRESSION ? "(default)" : "",
+                  encryption_data);
+
         }
 
 
